@@ -1,6 +1,6 @@
 # Ubuntu 24.04 build runner
 
-Use a dedicated Linux x86_64 host for this repository, with at least 16 GB RAM and 300 GiB free on the filesystem containing the runner workspace and Docker data directory. An SSD is recommended. The builder checks free space before each version; accumulated Docker build caches can require additional storage. KVM is recommended by upstream for its general build environment; this workflow builds only the Docker VS target, not VM/ONIE images.
+Use a dedicated Linux x86_64 host for this repository, with at least 16 GB RAM and 300 GiB free on the filesystem containing the runner workspace and Docker data directory. An SSD is recommended. The builder checks free space before each platform; accumulated Docker build caches can require additional storage. The default configuration targets our six-core, 48 GB RAM host. KVM support is recommended by upstream for the complete build environment; ensure it is available for build steps that need virtualization. This workflow can build the VS Docker target and the Broadcom ONIE installer.
 
 ## Prerequisites
 
@@ -47,7 +47,7 @@ The source build runs with Docker access and upstream code. Only manual dispatch
 
 ## Tuning and maintenance
 
-Start with `build_jobs=1`. Increase it only with enough memory for upstream's package compilation: roughly 4–6 GB per job plus overhead, with package-level compilation sometimes using more. A 32 GB or larger host is a better starting point for four jobs. Upstream defaults also control parallelism inside individual packages, so this input is not a strict memory cap.
+The default `build_jobs=3` is intended for the dedicated six-core, 48 GB RAM runner. Builds run one platform at a time and remove its source workspace after upload, before starting the next platform. On a smaller 16 GB host, use `build_jobs=1`. Upstream package compilation can need roughly 4–6 GB per job plus overhead, with individual packages sometimes using more. Upstream defaults also control parallelism inside individual packages, so this input is not a strict memory cap. Lower it if memory pressure or swapping appears; increase it only after measuring the actual builds.
 
 Each job creates a uniquely named `sonic-vs-*` directory in the runner's temporary directory, marked with `.sonic-vs-builder`. Credentials use a separate temporary `sonic-vs-auth-*` directory and are removed after publication, including normal publication errors. On ordinary completion, cleanup restores any preexisting local GHCR branch tag, removes newly loaded image IDs when unused, and deletes the work directory. No host-wide prune is run.
 

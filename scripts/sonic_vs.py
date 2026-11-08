@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build upstream SONiC VS archives and publish validated images (stdlib only)."""
+"""Build upstream SONiC VS/Broadcom images and publish VS to GHCR (stdlib only)."""
 
 import argparse
 import hashlib
@@ -17,6 +17,15 @@ UPSTREAM = "https://github.com/sonic-net/sonic-buildimage.git"
 TAG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z", re.ASCII)
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 MARKER = ".sonic-vs-builder"
+TARGETS = {"vs": "docker-sonic-vs.gz", "broadcom": "sonic-broadcom.bin"}
+
+
+def checksum(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def run(*args, **kwargs):
@@ -46,8 +55,10 @@ def branches(value):
     return result
 
 
-def prepare(value, jobs):
+def prepare(value, jobs, images="both"):
     positive(jobs)
+    if images not in ("both", *TARGETS):
+        raise ValueError("images must be both, vs or broadcom")
     entries = []
     for branch in branches(value):
         ref = f"refs/heads/{branch}"
@@ -55,7 +66,8 @@ def prepare(value, jobs):
         matches = [line.split() for line in output.splitlines() if line.split()[-1] == ref]
         if len(matches) != 1 or not SHA.fullmatch(matches[0][0]):
             raise ValueError(f"Cannot resolve upstream branch: {branch}")
-        entries.append({"branch": branch, "commit": matches[0][0]})
+        entries.append({"branch": branch, "commit": matches[0][0],
+                        "images": list(TARGETS) if images == "both" else [images]})
     return {"include": entries}
 
 
@@ -144,8 +156,10 @@ def smoke(image):
         "-ec", "test -s /etc/sonic/sonic_version.yml; cat /etc/sonic/sonic_version.yml; sonic-cfggen --help")
 
 
-def build(work, branch, commit, jobs):
+def build(work, branch, commit, jobs, platform="vs"):
     work = owned_work(work)
+    if platform not in TARGETS:
+        raise ValueError("Unsupported build platform")
     if branches(branch) != [branch] or not SHA.fullmatch(commit):
         raise ValueError("Expected one validated branch and a full commit SHA")
     positive(jobs)
@@ -158,19 +172,29 @@ def build(work, branch, commit, jobs):
     run("git", "-C", str(source), "checkout", "--detach", commit)
     if capture("git", "-C", str(source), "rev-parse", "HEAD") != commit:
         raise ValueError("Checkout differs from resolved upstream commit")
-    for args in (("init",), ("configure", "PLATFORM=vs", "PLATFORM_ARCH=amd64"),
-                 (f"SONIC_BUILD_JOBS={jobs}", "target/docker-sonic-vs.gz")):
+    filename = TARGETS[platform]
+    for args in (("init",), ("configure", f"PLATFORM={platform}", "PLATFORM_ARCH=amd64"),
+                 (f"SONIC_BUILD_JOBS={jobs}", f"target/{filename}")):
         run("make", "UNATTENDED=y", *args, cwd=source)
-    archive = source / "target/docker-sonic-vs.gz"
-    image = archive_image(archive)
-    existed = subprocess.run(["docker", "image", "inspect", image],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-    # Persist cleanup ownership before loading or smoke testing can fail.
-    write_json(work / "image-state.json", {"image_id": image, "preexisting": existed})
-    load_untagged(archive)
-    smoke(image)
-    write_json(work / "validated.json", {"upstream": UPSTREAM, "branch": branch,
-                                        "commit": commit, "image_id": image})
+    archive = source / "target" / filename
+    metadata = {"upstream": UPSTREAM, "branch": branch, "commit": commit,
+                "platform": platform, "filename": filename}
+    if platform == "vs":
+        image = archive_image(archive)
+        existed = subprocess.run(["docker", "image", "inspect", image],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        # Persist cleanup ownership before loading or smoke testing can fail.
+        write_json(work / "image-state.json", {"image_id": image, "preexisting": existed})
+        load_untagged(archive)
+        smoke(image)
+        metadata["image_id"] = image
+    else:
+        with archive.open("rb") as stream:
+            if not stream.read(2) == b"#!" or archive.stat().st_size == 0:
+                raise ValueError("Broadcom output is not a nonempty ONIE shell installer")
+    metadata["sha256"] = checksum(archive)
+    metadata["size_bytes"] = archive.stat().st_size
+    write_json(work / "validated.json", metadata)
 
 
 def publish(work, repository):
@@ -231,7 +255,8 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     prep = sub.add_parser("prepare")
     prep.add_argument("--branches", required=True)
-    prep.add_argument("--build-jobs", default="1")
+    prep.add_argument("--build-jobs", default="3")
+    prep.add_argument("--images", choices=("both", *TARGETS), default="both")
     sub.add_parser("create-work")
     for name in ("build", "publish", "cleanup"):
         command = sub.add_parser(name)
@@ -239,18 +264,19 @@ def main():
         if name == "build":
             command.add_argument("--branch", required=True)
             command.add_argument("--commit", required=True)
-            command.add_argument("--build-jobs", default="1")
+            command.add_argument("--build-jobs", default="3")
+            command.add_argument("--platform", choices=TARGETS, default="vs")
         if name == "publish":
             command.add_argument("--repository", required=True)
     args = parser.parse_args()
     if args.command == "prepare":
-        print(json.dumps(prepare(args.branches, args.build_jobs), separators=(",", ":")))
+        print(json.dumps(prepare(args.branches, args.build_jobs, args.images), separators=(",", ":")))
     elif args.command == "create-work":
         work = Path(tempfile.mkdtemp(prefix="sonic-vs-", dir=os.environ.get("RUNNER_TEMP")))
         (work / MARKER).touch()
         print(work)
     elif args.command == "build":
-        build(args.work, args.branch, args.commit, args.build_jobs)
+        build(args.work, args.branch, args.commit, args.build_jobs, args.platform)
     elif args.command == "publish":
         publish(args.work, args.repository)
     else:

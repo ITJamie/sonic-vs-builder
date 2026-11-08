@@ -35,7 +35,14 @@ class Inputs(unittest.TestCase):
     def test_resolve_multiple_exact_refs(self, capture):
         capture.side_effect = [f"{COMMIT}\trefs/heads/202605", f"{COMMIT}\trefs/heads/202511"]
         matrix = builder.prepare("202605,202511", "1")
-        self.assertEqual(matrix, {"include": [{"branch": b, "commit": COMMIT} for b in ("202605", "202511")]})
+        self.assertEqual(matrix, {"include": [{"branch": b, "commit": COMMIT, "images": ["vs", "broadcom"]}
+                                              for b in ("202605", "202511")]})
+
+    @patch.object(builder, "capture", return_value=f"{COMMIT}\trefs/heads/202605")
+    def test_select_single_platform(self, _capture):
+        self.assertEqual(builder.prepare("202605", "3", "broadcom")["include"][0]["images"], ["broadcom"])
+        with self.assertRaises(ValueError):
+            builder.prepare("202605", "3", "unknown")
 
     @patch.object(builder, "capture")
     def test_missing_branch_aborts_whole_preparation(self, capture):
@@ -72,6 +79,27 @@ class WorkTests(unittest.TestCase):
     def test_archive_identity_is_config_hash(self):
         archive, image = self.archive()
         self.assertEqual(builder.archive_image(archive), image)
+
+    @patch.object(builder, "preflight")
+    @patch.object(builder, "capture", return_value=COMMIT)
+    @patch.object(builder, "smoke")
+    def test_broadcom_build_uses_correct_target_without_docker_publication(self, smoke, _capture, _preflight):
+        def command(*args, **kwargs):
+            if args[0] == "make" and "target/sonic-broadcom.bin" in args:
+                output = self.work / "source/target/sonic-broadcom.bin"
+                output.parent.mkdir()
+                output.write_bytes(b"#!/bin/sh\ninstaller payload")
+
+        with patch.object(builder, "run", side_effect=command) as run:
+            builder.build(self.work, "202605", COMMIT, "3", "broadcom")
+        calls = [call.args for call in run.call_args_list]
+        self.assertIn(("make", "UNATTENDED=y", "configure", "PLATFORM=broadcom", "PLATFORM_ARCH=amd64"), calls)
+        self.assertIn(("make", "UNATTENDED=y", "SONIC_BUILD_JOBS=3", "target/sonic-broadcom.bin"), calls)
+        smoke.assert_not_called()
+        metadata = json.loads((self.work / "validated.json").read_text())
+        self.assertEqual(metadata["platform"], "broadcom")
+        self.assertEqual(metadata["sha256"], builder.checksum(self.work / "source/target/sonic-broadcom.bin"))
+        self.assertNotIn("image_id", metadata)
 
     def test_reject_wrong_architecture_and_multiple_images(self):
         for config, count in (({"os": "linux", "architecture": "arm64"}, 1), (None, 2)):

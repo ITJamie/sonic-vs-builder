@@ -1,36 +1,59 @@
-# SONiC VS image builder
+# SONiC image builder
 
-Build the upstream [SONiC virtual-switch Docker image](https://github.com/sonic-net/sonic-buildimage/tree/202605/platform/vs) from a branch you choose, and publish it to this repository's GitHub Container Registry package:
+Build the upstream [SONiC virtual-switch Docker image](https://github.com/sonic-net/sonic-buildimage/tree/202605/platform/vs) and [Broadcom ONIE installer](https://github.com/sonic-net/sonic-buildimage/tree/202605/platform/broadcom) from a branch you choose. Download both from [GitHub Releases](https://github.com/ITJamie/sonic-vs-builder/releases), and pull the VS container from GitHub Container Registry:
 
 ```console
 docker pull ghcr.io/itjamie/sonic-vs-builder:202605
 ```
 
-Images are Linux amd64, built from `sonic-net/sonic-buildimage` without patches. The image tag is exactly the upstream branch name. Rebuilding a branch updates its tag; use the digest from the workflow summary when you need an immutable reference. There is no additional `latest` alias.
+Images are Linux amd64, built from `sonic-net/sonic-buildimage` without patches. The VS container tag is exactly the upstream branch name. Rebuilding a branch updates its container tag; use the digest from the workflow summary when you need an immutable reference. There is no additional `latest` alias. Downloadable releases retain every successful build separately.
 
 ## Set up a runner
 
-Follow [the Ubuntu runner guide](docs/runner.md). Builds require a dedicated self-hosted runner labeled `sonic-vs`; ordinary GitHub-hosted runners only validate this builder's code. Start with 16 GB RAM, 300 GiB free on both the workspace and Docker filesystems, and one build job. If those paths share a filesystem, the free-space checks refer to the same storage, not two separate 300 GiB allocations.
+Follow [the Ubuntu runner guide](docs/runner.md). Builds require a dedicated self-hosted runner labeled `sonic-vs`; ordinary GitHub-hosted runners only validate this builder's code. The default is tuned to our dedicated six-core, 48 GB RAM runner: three build jobs, with VS and Broadcom built sequentially. Hosts with 16 GB RAM should select one build job. Keep at least 300 GiB free on both the workspace and Docker filesystems. If those paths share a filesystem, the checks refer to the same storage, not two separate 300 GiB allocations.
 
 ## Trigger a build
 
-Open **Actions → Build SONiC VS → Run workflow** on `main`. Enter a branch, such as `202605`, or a comma-separated list, such as `202605,202511`. `build_jobs` controls upstream compilation parallelism and defaults to `1`.
+Open **Actions → Build SONiC images → Run workflow** on `main`. Enter a branch, such as `202605`, or a comma-separated list, such as `202605,202511`. Choose `images=both` (default), `vs`, or `broadcom`. `build_jobs` controls upstream compilation parallelism per platform and defaults to `3`.
 
 Using the GitHub CLI:
 
 ```console
-gh workflow run build.yml --repo ITJamie/sonic-vs-builder -f branches=202605 -f build_jobs=1
-gh workflow run build.yml --repo ITJamie/sonic-vs-builder -f branches=202605,202511 -f build_jobs=1
+gh workflow run build.yml --repo ITJamie/sonic-vs-builder -f branches=202605 -f images=both -f build_jobs=3
+gh workflow run build.yml --repo ITJamie/sonic-vs-builder -f branches=202605,202511 -f images=vs -f build_jobs=3
 gh run list --repo ITJamie/sonic-vs-builder --workflow build.yml
 ```
 
 All names are validated and resolved before any self-hosted job starts. Whitespace is trimmed and duplicate branches are removed. Empty entries, nonexistent branches, and branch names that cannot be represented exactly as Docker tags (for example `feature/test`) fail validation. Tags and arbitrary commit inputs are not accepted. Every build uses the resolved branch commit and its pinned submodules, even if the branch advances while waiting for the runner.
 
-Versions run sequentially and independently: failure of one version does not cancel the others. Build workflows share a concurrency group with cancellation disabled, preventing two builds from sharing the host. GitHub concurrency retains only one pending run, so submitting more runs while one is already pending can replace that pending run; submit several versions together in one branch list.
+Versions run sequentially and independently: failure of one version does not cancel the others. Within a version, VS builds first, its output is uploaded, and its workspace is removed before Broadcom begins. Failure of an earlier step stops the remaining steps for that version. Build workflows share a concurrency group with cancellation disabled, preventing two builds from sharing the host. GitHub concurrency retains only one pending run, so submitting more runs while one is already pending can replace that pending run; submit several versions together in one branch list.
 
-Each version runs `make init`, `make configure PLATFORM=vs PLATFORM_ARCH=amd64`, and `make SONIC_BUILD_JOBS=<jobs> target/docker-sonic-vs.gz` with `UNATTENDED=y`. Upstream tests and build defaults remain enabled. Other historical branches may need a different upstream environment; compatibility is established by successful builds, not guaranteed for every release.
+Each platform uses a fresh checkout of the same resolved upstream commit, then runs `make init`, `make configure PLATFORM=<vs|broadcom> PLATFORM_ARCH=amd64`, and `make SONIC_BUILD_JOBS=<jobs> <target>` with `UNATTENDED=y`. Targets are `target/docker-sonic-vs.gz` and `target/sonic-broadcom.bin`. Upstream tests and defaults remain enabled. The Broadcom target uses upstream's dependency selection, which can also build components for related Broadcom variants; this workflow uploads only the requested installer. Other historical branches may need a different upstream environment; compatibility is established by successful builds, not guaranteed for every release.
 
-The archive is loaded without importing upstream image tags. Before publishing, the builder checks Linux amd64, reads `/etc/sonic/sonic_version.yml`, and runs `sonic-cfggen --help` in a container with no network access. This checks image usability, not a complete virtual-switch topology.
+The VS archive is loaded without importing upstream image tags. Before publishing, the builder checks Linux amd64, reads `/etc/sonic/sonic_version.yml`, and runs `sonic-cfggen --help` in a container with no network access. This checks image usability, not a complete virtual-switch topology. The Broadcom output is checked for an ONIE shell-installer header and hashed; it is not boot-tested on switch hardware. Use it only with supported Broadcom platforms.
+
+## Downloadable releases
+
+Each branch/build attempt creates a separate release tagged `sonic-<branch>-<run-id>-<attempt>`, attached to the builder commit used by the workflow. Existing published releases are never overwritten and no release is automatically designated Latest.
+
+For the default `both` selection, a complete release contains:
+
+| Output | Purpose |
+| --- | --- |
+| `docker-sonic-vs.gz` | Docker image archive; load with `docker load -i docker-sonic-vs.gz`. |
+| `sonic-broadcom.bin` | Broadcom ONIE installer. |
+| `vs-metadata.json`, `broadcom-metadata.json` | Upstream commit, platform, output SHA-256 and size; VS metadata also records its GHCR digest. |
+| `vs-SHA256SUMS`, `broadcom-SHA256SUMS` | Checksums of the complete downloadable files. |
+| `vs-README.txt`, `broadcom-README.txt` | Download, reassembly, verification and usage instructions. |
+
+GitHub requires each release asset to be under 2 GiB. Larger files are uploaded as ordered 1 GiB parts named `*.part0001`, `*.part0002`, etc. Download all parts, reassemble, then check the checksum:
+
+```sh
+cat sonic-broadcom.bin.part* > sonic-broadcom.bin
+sha256sum -c broadcom-SHA256SUMS
+```
+
+Releases stay draft until all selected images and their metadata are uploaded. If a build or upload fails, the partial draft is retained for inspection by repository writers; it is not published as a complete release. Rerunning failed jobs uses a new attempt number and a separate release. A VS image already pushed to GHCR remains available even if the subsequent Broadcom build fails. A `broadcom`-only run does not touch GHCR.
 
 ## First publication and public pulls
 
@@ -51,7 +74,7 @@ Both commands must succeed without logging in. The digest pull verifies the exac
 
 ## Build results and failures
 
-The Actions job summary and `metadata.json` artifact contain the upstream branch, commit SHA, image ID, registry digest and pull command. Each version uploads build and publication logs, including on failure, with 14-day retention. The multi-gigabyte image archive is not uploaded as an Actions artifact; GHCR holds the image.
+The Actions job summary links to the published release. VS metadata contains the upstream branch, commit SHA, image ID, registry digest and pull command; Broadcom metadata records its output checksum and size. Each platform uploads build and publication logs, including on failure, as Actions artifacts with 14-day retention. The images are retained as release downloads; the VS image is also available through GHCR. Large binaries are not duplicated in Actions artifacts.
 
 A failed build or smoke check skips publication, leaving the existing registry tag untouched. A successful push followed by a metadata or cleanup failure can still have updated the registry tag; inspect the publication log in that case. If a job waits indefinitely, check the runner is online with all four labels: `self-hosted`, `linux`, `x64`, `sonic-vs`.
 
@@ -65,10 +88,10 @@ The scripts require Python 3.10+ and its standard library. From the repository r
 python3 -m unittest discover -s tests -v
 python3 -m compileall -q scripts tests
 actionlint
-python3 scripts/sonic_vs.py prepare --branches 202605,202511 --build-jobs 1
+python3 scripts/sonic_vs.py prepare --branches 202605,202511 --build-jobs 3 --images both
 ```
 
-The first three commands are also run in CI. `actionlint` checks workflow expressions and uses ShellCheck for embedded shell when available; the Ubuntu CI runner provides ShellCheck. The final command queries upstream and prints the resolved build matrix. Build and publication are separate commands; `python3 scripts/sonic_vs.py --help` lists them.
+The first three commands are also run in CI. `actionlint` checks workflow expressions and uses ShellCheck for embedded shell when available; the Ubuntu CI runner provides ShellCheck. The final command queries upstream and prints the resolved build matrix. Build, GHCR publication and release publication are separate commands; `python3 scripts/sonic_vs.py --help` and `python3 scripts/releases.py --help` list them. The workflow uses `GITHUB_TOKEN` with `contents: write` for releases and `packages: write` for GHCR; no additional secrets are needed.
 
 ## Future Docker Hub publication
 

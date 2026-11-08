@@ -18,6 +18,7 @@ TAG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z", re.ASCII)
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 MARKER = ".sonic-vs-builder"
 TARGETS = {"vs": "docker-sonic-vs.gz", "broadcom": "sonic-broadcom.bin"}
+PATCHES = Path(__file__).resolve().parents[1] / "patches"
 
 
 def checksum(path):
@@ -82,6 +83,54 @@ def owned_work(path):
 
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
+
+
+def apply_branch_patches(source, work, branch, patch_root=None):
+    """Apply ordered patches for the exact upstream branch, without fuzzy matching."""
+    if branches(branch) != [branch]:
+        raise ValueError("Expected one validated branch for patches")
+    root = Path(patch_root) if patch_root is not None else PATCHES
+    results = []
+    report = {"branch": branch, "patches": results}
+    report_path = work / "patches.json"
+    write_json(report_path, report)
+    for path in sorted((root / branch).glob("*.patch")):
+        entry = {"path": f"{branch}/{path.name}", "sha256": checksum(path), "status": "checking"}
+        results.append(entry)
+        write_json(report_path, report)
+        command = ["git", "-C", str(source), "apply", "--whitespace=error-all"]
+        check = subprocess.run([*command, "--check", str(path.resolve())], text=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if check.returncode == 0:
+            try:
+                run(*command, str(path.resolve()))
+            except subprocess.CalledProcessError:
+                entry["status"] = "failed"
+                write_json(report_path, report)
+                raise
+            entry["status"] = "applied"
+        else:
+            reverse = subprocess.run([*command, "--reverse", "--check", str(path.resolve())],
+                                     text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            if reverse.returncode != 0:
+                entry["status"] = "failed"
+                write_json(report_path, report)
+                raise ValueError(f"Patch {entry['path']} no longer applies; review upstream changes:\n{check.stdout}")
+            entry["status"] = "already-applied"
+        write_json(report_path, report)
+        print(f"Branch patch {entry['path']}: {entry['status']} ({entry['sha256']})", flush=True)
+
+    if results:
+        # Upstream can tag base images by Dockerfile contents alone. Include the
+        # patch identity so an old image cannot retain unpatched constraints/code.
+        identities = [{"path": entry["path"], "sha256": entry["sha256"]} for entry in results]
+        stamp = hashlib.sha256(json.dumps(identities, sort_keys=True).encode()).hexdigest()
+        templates = sorted(source.glob("sonic-slave-*/Dockerfile.j2"))
+        templates += sorted((source / "dockers").glob("**/Dockerfile.j2"))
+        for template in templates:
+            with template.open("a") as stream:
+                stream.write(f"\n# sonic-vs-builder branch patches: {stamp}\n")
+    return results
 
 
 def permissions_image():
@@ -331,12 +380,15 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
     compatibility += fix_cached_rsync_cleanup(source, cache_mode)
     cache_args = cache_settings(source, work, branch, cache_mode, cache_dir)
     filename = TARGETS[platform]
-    for args in (("init",), ("configure", f"PLATFORM={platform}", "PLATFORM_ARCH=amd64"),
+    run("make", "UNATTENDED=y", *cache_args, "init", cwd=source)
+    patches = apply_branch_patches(source, work, branch)
+    for args in (("configure", f"PLATFORM={platform}", "PLATFORM_ARCH=amd64"),
                  (f"SONIC_BUILD_JOBS={jobs}", f"target/{filename}")):
         run("make", "UNATTENDED=y", *cache_args, *args, cwd=source)
     archive = source / "target" / filename
     metadata = {"upstream": UPSTREAM, "branch": branch, "commit": commit,
-                "platform": platform, "filename": filename, "compatibility_fixes": compatibility}
+                "platform": platform, "filename": filename, "compatibility_fixes": compatibility,
+                "patches": patches}
     if platform == "vs":
         image = archive_image(archive)
         existed = subprocess.run(["docker", "image", "inspect", image],

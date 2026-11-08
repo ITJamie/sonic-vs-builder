@@ -84,7 +84,8 @@ class WorkTests(unittest.TestCase):
     @patch.object(builder, "preflight")
     @patch.object(builder, "capture", return_value=COMMIT)
     @patch.object(builder, "smoke")
-    def test_broadcom_build_uses_correct_target_without_docker_publication(self, smoke, _capture, _preflight):
+    @patch.object(builder, "apply_branch_patches", return_value=[])
+    def test_broadcom_build_uses_correct_target_without_docker_publication(self, _patches, smoke, _capture, _preflight):
         def command(*args, **kwargs):
             if args[0] == "make" and "target/sonic-broadcom.bin" in args:
                 output = self.work / "source/target/sonic-broadcom.bin"
@@ -162,6 +163,7 @@ class WorkTests(unittest.TestCase):
     @patch.object(builder, "load_untagged")
     @patch.object(builder, "cache_settings", return_value=[])
     @patch.object(builder, "smoke", side_effect=subprocess.CalledProcessError(1, "docker"))
+    @patch.object(builder, "apply_branch_patches", return_value=[])
     def test_smoke_failure_never_creates_validation(self, *_mocks):
         with patch.object(builder.subprocess, "run") as process:
             process.return_value.returncode = 1
@@ -370,7 +372,8 @@ class CacheTests(unittest.TestCase):
 
     @patch.object(builder, "preflight")
     @patch.object(builder, "capture", return_value=COMMIT)
-    def test_build_forwards_native_cache_flags_through_every_make_stage(self, _capture, _preflight):
+    @patch.object(builder, "apply_branch_patches", return_value=[])
+    def test_build_forwards_native_cache_flags_through_every_make_stage(self, _patches, _capture, _preflight):
         work = self.base / "build-work"
         work.mkdir()
         (work / builder.MARKER).touch()

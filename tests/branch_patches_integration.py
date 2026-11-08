@@ -1,0 +1,63 @@
+"""Apply the shipped patch to pinned upstream and reproduce/fix pip resolution."""
+
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import urllib.request
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+from sonic_vs import apply_branch_patches
+
+COMMIT = "8076a44fa579fde75f73299f03e7f3cac298d9e3"
+CONSTRAINTS = "files/build/versions-public/build/build-sonic-slave-bookworm/versions-py3"
+URL = f"https://raw.githubusercontent.com/sonic-net/sonic-buildimage/{COMMIT}/{CONSTRAINTS}"
+
+
+def relevant(text):
+    return "\n".join(line for line in text.splitlines()
+                     if line.startswith(("blessed==", "enlighten==", "wcwidth=="))) + "\n"
+
+
+with tempfile.TemporaryDirectory() as directory:
+    work = Path(directory).resolve()
+    source = work / "source"
+    target = source / CONSTRAINTS
+    target.parent.mkdir(parents=True)
+    original = urllib.request.urlopen(URL, timeout=60).read().decode()
+    target.write_text(original)
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    result = apply_branch_patches(source, work, "202605")
+    assert len(result) == 1 and result[0]["status"] == "applied"
+    assert target.read_text() == original.replace("wcwidth==0.7.0\n", "wcwidth==0.9.2\n")
+    assert apply_branch_patches(source, work, "202605")[0]["status"] == "already-applied"
+    (work / "broken.txt").write_text(relevant(original))
+    (work / "fixed.txt").write_text(relevant(target.read_text()))
+    probe = '''
+import importlib.metadata
+import subprocess
+import sys
+
+pip = [sys.executable, "-m", "pip", "--disable-pip-version-check"]
+broken = subprocess.run([*pip, "install", "--dry-run", "-r", "/probe/broken.txt"],
+                        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+assert broken.returncode != 0, broken.stdout
+assert "ResolutionImpossible" in broken.stdout and "wcwidth" in broken.stdout, broken.stdout
+print("Reproduced original upstream pip dependency conflict", flush=True)
+subprocess.run([*pip, "install", "-r", "/probe/fixed.txt"], check=True)
+subprocess.run([*pip, "check"], check=True)
+assert importlib.metadata.version("wcwidth") == "0.9.2"
+assert importlib.metadata.version("blessed") == "1.52.0"
+assert importlib.metadata.version("enlighten") == "1.14.1"
+from blessed import Terminal
+from wcwidth import wcswidth
+import enlighten
+assert Terminal().length("hello") == 5
+assert wcswidth("hello") == 5
+manager = enlighten.get_manager()
+manager.stop()
+print("Patched constraints resolve; pip check and dependency smoke checks passed", flush=True)
+'''
+    subprocess.run(["docker", "run", "--rm", "-i", "--platform", "linux/amd64",
+                    "--mount", f"type=bind,source={work},target=/probe,readonly",
+                    "python:3.11-slim-bookworm", "python", "-u", "-"], input=probe, text=True, check=True)

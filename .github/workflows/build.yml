@@ -136,6 +136,7 @@ jobs:
             ${{ steps.vs_work.outputs.path }}/validated.json
             ${{ steps.vs_work.outputs.path }}/release.json
             ${{ steps.vs_work.outputs.path }}/cache.json
+            ${{ steps.vs_work.outputs.path }}/patches.json
           retention-days: 14
           if-no-files-found: warn
       - name: Clean VS workspace before continuing
@@ -177,6 +178,7 @@ jobs:
             ${{ steps.broadcom_work.outputs.path }}/validated.json
             ${{ steps.broadcom_work.outputs.path }}/release.json
             ${{ steps.broadcom_work.outputs.path }}/cache.json
+            ${{ steps.broadcom_work.outputs.path }}/patches.json
           retention-days: 14
           if-no-files-found: warn
       - name: Clean Broadcom workspace before continuing

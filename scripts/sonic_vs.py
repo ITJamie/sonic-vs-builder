@@ -297,7 +297,8 @@ def smoke(image):
     if actual != "linux/amd64":
         raise ValueError(f"Unexpected image platform: {actual}")
     run("docker", "run", "--rm", "--network", "none", "--entrypoint", "/bin/sh", image,
-        "-ec", "test -s /etc/sonic/sonic_version.yml; cat /etc/sonic/sonic_version.yml; sonic-cfggen --help")
+        "-ec", "test -s /etc/sonic/sonic_version.yml; cat /etc/sonic/sonic_version.yml; "
+        "/usr/local/bin/supervisord --version; rsync --version; sonic-cfggen --help")
 
 
 def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", cache_dir=None):

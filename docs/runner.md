@@ -53,6 +53,35 @@ Each job creates a uniquely named `sonic-vs-*` directory in the runner's tempora
 
 Upstream may retain reusable build images and caches. These are not removed automatically because they are not all uniquely attributable to one job. Check `docker system df` and the free space before subsequent builds. Remove specific obsolete images or caches only when you have confirmed no build is active; configure host-specific maintenance outside this workflow.
 
+## Persistent cache maintenance
+
+The builder automatically creates `~/.cache/sonic-vs-builder` as the runner service account. It survives temporary workspace cleanup and is shared by later jobs on this host. No root access or additional packages are needed for the default location. GitHub-hosted validation jobs do not populate it.
+
+The layout is:
+
+```text
+~/.cache/sonic-vs-builder/
+  v1/
+    branches/<branch>/amd64/packages/  # Native dependency-checked package cache
+    downloads/amd64/                  # Native version/download cache
+```
+
+Package caches are partitioned by upstream branch and architecture. Upstream's keys additionally distinguish platform, Debian build environment, source and dependencies; leave those checks enabled. Download storage is shared, with upstream's hooks providing their own image/version keys. Raw build directories remain separate and disposable.
+
+To use a different filesystem, prepare a directory for the service account and set repository Actions variable `SONIC_CACHE_DIR` to its absolute host path. The path is passed directly into the build container as a bind mount, so it must exist on the local Docker host. Check the chosen filesystem has at least 300 GiB free, in addition to the workspace and Docker storage checks. Avoid spaces or Make-special characters in its path.
+
+Inspect usage as the runner account:
+
+```sh
+du -sh ~/.cache/sonic-vs-builder/v1/branches/* ~/.cache/sonic-vs-builder/v1/downloads
+df -h ~/.cache/sonic-vs-builder
+docker system df
+```
+
+Substitute your configured cache root when using `SONIC_CACHE_DIR`. The cache has no automatic eviction and can grow with new branches and source revisions. Remove obsolete branch package directories only after stopping the runner and confirming no builds are active. To reset a problematic cache, rename the affected branch directory (or the complete `v1` directory), then restart the runner; the next build creates a fresh cache. Remove the renamed directory once you no longer need it. Normal job cleanup does not remove persistent caches.
+
+For troubleshooting without clearing data, dispatch with `cache_mode=off`. Both native cache methods are disabled for that run and the persistent cache is preserved. A cache from an older build cannot make an unsupported source branch buildable; upstream build dependencies still need to be available.
+
 After a host crash or forced process termination, stop the runner and verify no build containers are active. Inspect leftover work directories and preserve any logs you need, then invoke cleanup on each verified project-owned directory:
 
 ```console

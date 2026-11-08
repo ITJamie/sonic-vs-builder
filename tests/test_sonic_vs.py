@@ -8,6 +8,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("sonic_vs", Path(__file__).parents[1] / "scripts/sonic_vs.py")
@@ -90,7 +91,8 @@ class WorkTests(unittest.TestCase):
                 output.parent.mkdir()
                 output.write_bytes(b"#!/bin/sh\ninstaller payload")
 
-        with patch.object(builder, "run", side_effect=command) as run:
+        with patch.object(builder, "run", side_effect=command) as run, \
+                patch.object(builder, "cache_settings", return_value=[]):
             builder.build(self.work, "202605", COMMIT, "3", "broadcom")
         calls = [call.args for call in run.call_args_list]
         self.assertIn(("make", "UNATTENDED=y", "configure", "PLATFORM=broadcom", "PLATFORM_ARCH=amd64"), calls)
@@ -158,6 +160,7 @@ class WorkTests(unittest.TestCase):
     @patch.object(builder, "capture", return_value=COMMIT)
     @patch.object(builder, "archive_image", return_value="sha256:example")
     @patch.object(builder, "load_untagged")
+    @patch.object(builder, "cache_settings", return_value=[])
     @patch.object(builder, "smoke", side_effect=subprocess.CalledProcessError(1, "docker"))
     def test_smoke_failure_never_creates_validation(self, *_mocks):
         with patch.object(builder.subprocess, "run") as process:
@@ -219,6 +222,119 @@ class WorkTests(unittest.TestCase):
                 builder.publish(self.work, "ITJamie/sonic-vs-builder")
         self.assertFalse(Path(run.call_args.kwargs["env"]["DOCKER_CONFIG"]).exists())
         self.assertFalse((self.work / "metadata.json").exists())
+
+
+class CacheTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name).resolve()
+        self.work = self.base / "work"
+        self.work.mkdir()
+        (self.work / builder.MARKER).touch()
+        self.source = self.work / "source"
+        (self.source / "rules").mkdir(parents=True)
+        self.variables = ("SONIC_DPKG_CACHE_METHOD", "SONIC_DPKG_CACHE_SOURCE",
+                          "SONIC_VERSION_CACHE_METHOD", "SONIC_VERSION_CACHE_SOURCE")
+        self.config = "\n".join(f"{name} ?= none" for name in self.variables)
+        (self.source / "rules/config").write_text(self.config)
+        (self.source / "Makefile.work").write_text(self.config)
+        self.root = self.base / "persistent"
+        disk = patch.object(builder.shutil, "disk_usage", return_value=SimpleNamespace(free=1024**4))
+        disk.start()
+        self.addCleanup(disk.stop)
+
+    def test_cache_survives_workspace_cleanup_and_is_reused(self):
+        args = builder.cache_settings(self.source, self.work, "202605", directory=str(self.root))
+        packages = self.root / "v1/branches/202605/amd64/packages"
+        downloads = self.root / "v1/downloads/amd64"
+        (packages / "package.tgz").write_bytes(b"dependency-checked package")
+        (downloads / "download.bin").write_bytes(b"versioned download")
+        again = builder.cache_settings(self.source, self.work, "202605", directory=str(self.root))
+        self.assertEqual(args, again)
+        self.assertIn(f"SONIC_DPKG_CACHE_SOURCE={packages}", args)
+        self.assertIn(f"SONIC_VERSION_CACHE_SOURCE={downloads}", args)
+        self.assertIn("SONIC_DPKG_CACHE_METHOD=cache", args)
+        self.assertIn("SONIC_VERSION_CACHE_METHOD=cache", args)
+        self.assertEqual((self.source / "rules/config").read_text(), self.config)
+        self.assertEqual((self.source / "Makefile.work").read_text(), self.config)
+        builder.cleanup(self.work)
+        self.assertEqual((packages / "package.tgz").read_bytes(), b"dependency-checked package")
+        self.assertEqual((downloads / "download.bin").read_bytes(), b"versioned download")
+
+    @patch.object(builder, "preflight")
+    @patch.object(builder, "capture", return_value=COMMIT)
+    def test_build_forwards_native_cache_flags_through_every_make_stage(self, _capture, _preflight):
+        work = self.base / "build-work"
+        work.mkdir()
+        (work / builder.MARKER).touch()
+
+        def command(*args, **kwargs):
+            if args[0] == "git" and "--detach" in args:
+                source = work / "source"
+                (source / "rules").mkdir()
+                (source / "rules/config").write_text(self.config)
+                (source / "Makefile.work").write_text(self.config)
+            if args[0] == "make" and "target/sonic-broadcom.bin" in args:
+                target = work / "source/target"
+                target.mkdir()
+                (target / "sonic-broadcom.bin").write_bytes(b"#!/bin/sh\ninstaller")
+
+        with patch.object(builder, "run", side_effect=command) as run:
+            builder.build(work, "202605", COMMIT, "3", "broadcom", "read-write", str(self.root))
+        makes = [call for call in run.call_args_list if call.args[0] == "make"]
+        self.assertEqual(len(makes), 3)
+        for call in makes:
+            self.assertIn("SONIC_DPKG_CACHE_METHOD=cache", call.args)
+            self.assertIn(f"SONIC_DPKG_CACHE_SOURCE={self.root}/v1/branches/202605/amd64/packages", call.args)
+            self.assertIn("SONIC_VERSION_CACHE_METHOD=cache", call.args)
+            self.assertIn(f"SONIC_VERSION_CACHE_SOURCE={self.root}/v1/downloads/amd64", call.args)
+
+    def test_platforms_share_cache_paths_but_branches_partition_packages(self):
+        vs = builder.cache_settings(self.source, self.work, "202605", directory=str(self.root))
+        broadcom = builder.cache_settings(self.source, self.work, "202605", directory=str(self.root))
+        older = builder.cache_settings(self.source, self.work, "202511", directory=str(self.root))
+        self.assertEqual(vs, broadcom)
+        self.assertNotEqual(vs[1], older[1])
+        self.assertEqual(vs[3], older[3])
+
+    def test_old_branch_uses_package_cache_without_unsupported_download_cache(self):
+        old_config = "\n".join(f"{name} ?= none" for name in self.variables[:2])
+        (self.source / "rules/config").write_text(old_config)
+        (self.source / "Makefile.work").write_text(old_config)
+        args = builder.cache_settings(self.source, self.work, "202111", directory=str(self.root))
+        self.assertIn("SONIC_DPKG_CACHE_METHOD=cache", args)
+        self.assertIn("SONIC_VERSION_CACHE_METHOD=none", args)
+        self.assertFalse((self.root / "v1/downloads").exists())
+        self.assertIsNone(json.loads((self.work / "cache.json").read_text())["downloads"])
+
+    def test_off_does_not_create_or_access_persistent_storage(self):
+        args = builder.cache_settings(self.base / "nonexistent", self.work, "202605", "off", str(self.root))
+        self.assertEqual(args, ["SONIC_DPKG_CACHE_METHOD=none", "SONIC_VERSION_CACHE_METHOD=none"])
+        self.assertFalse(self.root.exists())
+
+    def test_environment_override_and_home_default(self):
+        with patch.dict(os.environ, {"SONIC_CACHE_DIR": str(self.root)}):
+            builder.cache_settings(self.source, self.work, "202605")
+        self.assertTrue(self.root.exists())
+        with patch.dict(os.environ, {"SONIC_CACHE_DIR": ""}), patch.object(builder.Path, "home", return_value=self.base / "home"):
+            builder.cache_settings(self.source, self.work, "202605")
+        self.assertTrue((self.base / "home/.cache/sonic-vs-builder/v1").exists())
+
+    def test_reject_temporary_or_make_unsafe_paths(self):
+        for path in (str(self.work / "cache"), "relative/path", str(self.root) + " bad", str(self.root) + "$(id)"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                builder.cache_settings(self.source, self.work, "202605", directory=path)
+
+    def test_low_space_prevents_building_into_cache(self):
+        with patch.object(builder.shutil, "disk_usage", return_value=SimpleNamespace(free=1024)):
+            with self.assertRaisesRegex(ValueError, "300 GiB"):
+                builder.cache_settings(self.source, self.work, "202605", directory=str(self.root))
+
+    def test_unsupported_branch_reports_bypass_option(self):
+        (self.source / "rules/config").write_text("")
+        with self.assertRaisesRegex(ValueError, "cache_mode=off"):
+            builder.cache_settings(self.source, self.work, "202605", directory=str(self.root))
 
 
 if __name__ == "__main__":

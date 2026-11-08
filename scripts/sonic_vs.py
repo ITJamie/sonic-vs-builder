@@ -84,6 +84,59 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
+def cache_settings(source, work, branch, mode="read-write", directory=None):
+    """Use native dependency/version caches; never share raw target directories."""
+    if mode not in ("read-write", "off"):
+        raise ValueError("cache_mode must be read-write or off")
+    if mode == "off":
+        write_json(work / "cache.json", {"mode": "off"})
+        print("Persistent cache disabled", flush=True)
+        return ["SONIC_DPKG_CACHE_METHOD=none", "SONIC_VERSION_CACHE_METHOD=none"]
+
+    config = (source / "rules/config").read_text()
+    makefile = (source / "Makefile.work").read_text()
+    for variable in ("SONIC_DPKG_CACHE_METHOD", "SONIC_DPKG_CACHE_SOURCE"):
+        if variable not in config or variable not in makefile:
+            raise ValueError("This branch lacks native package-cache support; select cache_mode=off")
+    configured = directory or os.environ.get("SONIC_CACHE_DIR") or str(Path.home() / ".cache/sonic-vs-builder")
+    path = Path(configured).expanduser()
+    if not path.is_absolute() or not re.fullmatch(r"/[A-Za-z0-9_./-]+", str(path)):
+        raise ValueError("SONIC_CACHE_DIR must be an absolute path using letters, numbers, /, _, . or -")
+    root = path.resolve()
+    if not re.fullmatch(r"/[A-Za-z0-9_./-]+", str(root)):
+        raise ValueError("Resolved cache path contains characters unsupported by SONiC's Makefiles")
+    # Cleanup removes the entire work directory. Persistent data must be outside it.
+    if root.is_relative_to(work.resolve()):
+        raise ValueError("Persistent cache must be outside the temporary work directory")
+    packages = root / "v1/branches" / branch / "amd64/packages"
+    downloads = root / "v1/downloads/amd64"
+    package_source = str(packages)
+    # 'cache' is the read/write spelling supported by old and current branches.
+    arguments = ["SONIC_DPKG_CACHE_METHOD=cache", f"SONIC_DPKG_CACHE_SOURCE={package_source}"]
+    supports_downloads = all(variable in config and variable in makefile for variable in (
+        "SONIC_VERSION_CACHE_METHOD", "SONIC_VERSION_CACHE_SOURCE"))
+    packages.mkdir(parents=True, exist_ok=True)
+    if supports_downloads:
+        downloads.mkdir(parents=True, exist_ok=True)
+        arguments.extend(["SONIC_VERSION_CACHE_METHOD=cache", f"SONIC_VERSION_CACHE_SOURCE={downloads}"])
+    else:
+        arguments.append("SONIC_VERSION_CACHE_METHOD=none")
+        print("Upstream branch has no native download/version cache; package caching remains enabled", flush=True)
+    for location in (packages, downloads) if supports_downloads else (packages,):
+        if shutil.disk_usage(location).free < 300 * 1024**3:
+            raise ValueError(f"Need at least 300 GiB free on the cache filesystem containing {location}")
+        # Check actual write access before starting a long source build.
+        with tempfile.TemporaryFile(dir=location):
+            pass
+    details = {"mode": mode, "root": str(root), "packages": package_source,
+               "downloads": str(downloads) if supports_downloads else None}
+    write_json(work / "cache.json", details)
+    print(f"Persistent package cache: {packages}", flush=True)
+    if supports_downloads:
+        print(f"Persistent download cache: {downloads}", flush=True)
+    return arguments
+
+
 def preflight(work):
     if sys.platform != "linux" or os.uname().machine != "x86_64" or os.geteuid() == 0:
         raise ValueError("Builds require a non-root Linux x86_64 user")
@@ -156,7 +209,7 @@ def smoke(image):
         "-ec", "test -s /etc/sonic/sonic_version.yml; cat /etc/sonic/sonic_version.yml; sonic-cfggen --help")
 
 
-def build(work, branch, commit, jobs, platform="vs"):
+def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", cache_dir=None):
     work = owned_work(work)
     if platform not in TARGETS:
         raise ValueError("Unsupported build platform")
@@ -172,10 +225,11 @@ def build(work, branch, commit, jobs, platform="vs"):
     run("git", "-C", str(source), "checkout", "--detach", commit)
     if capture("git", "-C", str(source), "rev-parse", "HEAD") != commit:
         raise ValueError("Checkout differs from resolved upstream commit")
+    cache_args = cache_settings(source, work, branch, cache_mode, cache_dir)
     filename = TARGETS[platform]
     for args in (("init",), ("configure", f"PLATFORM={platform}", "PLATFORM_ARCH=amd64"),
                  (f"SONIC_BUILD_JOBS={jobs}", f"target/{filename}")):
-        run("make", "UNATTENDED=y", *args, cwd=source)
+        run("make", "UNATTENDED=y", *cache_args, *args, cwd=source)
     archive = source / "target" / filename
     metadata = {"upstream": UPSTREAM, "branch": branch, "commit": commit,
                 "platform": platform, "filename": filename}
@@ -266,6 +320,8 @@ def main():
             command.add_argument("--commit", required=True)
             command.add_argument("--build-jobs", default="3")
             command.add_argument("--platform", choices=TARGETS, default="vs")
+            command.add_argument("--cache-mode", choices=("read-write", "off"), default="read-write")
+            command.add_argument("--cache-dir", help="Persistent cache root (or SONIC_CACHE_DIR; defaults to ~/.cache/sonic-vs-builder)")
         if name == "publish":
             command.add_argument("--repository", required=True)
     args = parser.parse_args()
@@ -276,7 +332,7 @@ def main():
         (work / MARKER).touch()
         print(work)
     elif args.command == "build":
-        build(args.work, args.branch, args.commit, args.build_jobs, args.platform)
+        build(args.work, args.branch, args.commit, args.build_jobs, args.platform, args.cache_mode, args.cache_dir)
     elif args.command == "publish":
         publish(args.work, args.repository)
     else:

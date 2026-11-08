@@ -16,6 +16,8 @@ Follow [the Ubuntu runner guide](docs/runner.md). Builds require a dedicated sel
 
 Open **Actions → Build SONiC images → Run workflow** on `main`. Enter a branch, such as `202605`, or a comma-separated list, such as `202605,202511`. Choose `images=both` (default), `vs`, or `broadcom`. `build_jobs` controls upstream compilation parallelism per platform and defaults to `3`.
 
+`cache_mode=read-write` is enabled by default. Select `off` to bypass the persistent caches for a diagnostic build; this does not erase them.
+
 Using the GitHub CLI:
 
 ```console
@@ -31,6 +33,21 @@ Versions run sequentially and independently: failure of one version does not can
 Each platform uses a fresh checkout of the same resolved upstream commit, then runs `make init`, `make configure PLATFORM=<vs|broadcom> PLATFORM_ARCH=amd64`, and `make SONIC_BUILD_JOBS=<jobs> <target>` with `UNATTENDED=y`. Targets are `target/docker-sonic-vs.gz` and `target/sonic-broadcom.bin`. Upstream tests and defaults remain enabled. The Broadcom target uses upstream's dependency selection, which can also build components for related Broadcom variants; this workflow uploads only the requested installer. Other historical branches may need a different upstream environment; compatibility is established by successful builds, not guaranteed for every release.
 
 The VS archive is loaded without importing upstream image tags. Before publishing, the builder checks Linux amd64, reads `/etc/sonic/sonic_version.yml`, and runs `sonic-cfggen --help` in a container with no network access. This checks image usability, not a complete virtual-switch topology. The Broadcom output is checked for an ONIE shell-installer header and hashed; it is not boot-tested on switch hardware. Use it only with supported Broadcom platforms.
+
+## Persistent runner cache
+
+The runner keeps reusable data in `~/.cache/sonic-vs-builder`, outside the disposable build workspaces. This is runner-local storage: subsequent VS and Broadcom builds on this host can reuse it, including future workflow runs. No Actions cache upload/download is needed, and normal workspace cleanup leaves it intact.
+
+The builder enables upstream's own cache interfaces on every Make invocation:
+
+- **Packages:** `SONIC_DPKG_CACHE_METHOD=cache`, with storage under `v1/branches/<branch>/amd64/packages`. SONiC decides whether an entry matches its source, dependency, architecture, Debian environment and platform hashes. VS and Broadcom use the same branch cache directory, but platform-specific entries remain distinct; do not expect every compiled VS package to be reused for Broadcom.
+- **Downloads:** `SONIC_VERSION_CACHE_METHOD=cache`, with shared storage under `v1/downloads/amd64`, mounted by upstream as `/vcache`. Supported build hooks can reuse versioned downloads across platforms and runs. This does not cover every network request: the fresh top-level Git fetch, submodule initialization and downloads bypassing upstream hooks may still require network access.
+
+The cache settings do not modify upstream recipes, remove platform checks, or share raw `target/` directories. Cache misses build normally and populate the cache. The first cached build starts cold; earlier runs with caching disabled do not automatically seed it. Older branches such as `202111` provide package caching but lack the newer download cache; the builder detects that and enables only the supported cache. A branch with no native package-cache support requires `cache_mode=off`.
+
+To choose another disk, set the repository Actions variable **`SONIC_CACHE_DIR`** to an absolute host path owned by `github-runner`, for example `/mnt/nvme/sonic-vs-cache`. The default needs no manual directory setup. For local builds, use the same environment variable or `build --cache-dir /absolute/path`. Paths must be outside the temporary work directory and use only letters, numbers, `/`, `_`, `.` and `-`, as required for safe Make variable forwarding. The cache filesystem must have 300 GiB free before building.
+
+Cache locations and mode are printed in the build log and retained in `cache.json` alongside each platform's Actions log artifact. See the [runner guide](docs/runner.md#persistent-cache-maintenance) for disk usage and reset instructions.
 
 ## Downloadable releases
 

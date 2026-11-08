@@ -108,6 +108,47 @@ def prepare_cache_permissions(paths):
             "find /cache -type d -exec setfacl -m d:u::rwx,d:g::rwx,d:o::rwx {} +")
 
 
+def fix_download_cache(source, mode):
+    """Work around upstream treating mirror URLs as successful cache restores."""
+    hook = source / "src/sonic-build-hooks/scripts/buildinfo_base.sh"
+    broken = 'if [[ ! -z "$(get_version_cache_option)" && ${#SRC_FILENAMES[@]} -eq 0 ]]; then'
+    if mode == "off" or not hook.is_file():
+        return []
+    original = hook.read_text()
+    if broken not in original:
+        return []
+    start = original.index("download_packages()\n{")
+    end = original.index("\nrun_pip_command()", start)
+    function = original[start:end]
+    replacements = {
+        "    local DST_FILENAME=\n": "    local DST_FILENAME=\n    local CACHE_URL_COUNT=0 CACHE_HIT_COUNT=0\n",
+        '        elif [[ "$para" == *://* ]]; then\n':
+            '        elif [[ "$para" == *://* ]]; then\n            CACHE_URL_COUNT=$((CACHE_URL_COUNT + 1))\n',
+        '                            cp "${SRC_FILENAME}" "${DST_FILENAME}"\n':
+            '                            cp "${SRC_FILENAME}" "${DST_FILENAME}" || return $?\n'
+            '                            CACHE_HIT_COUNT=$((CACHE_HIT_COUNT + 1))\n',
+        broken: 'if [[ ! -z "$(get_version_cache_option)" && ${#SRC_FILENAMES[@]} -eq 0 '
+                '&& ${CACHE_URL_COUNT} -gt 0 && ${CACHE_HIT_COUNT} -eq ${CACHE_URL_COUNT} ]]; then',
+    }
+    for old, new in replacements.items():
+        if function.count(old) != 1:
+            raise ValueError("Unrecognized upstream download hook; select cache_mode=off until reviewed")
+        function = function.replace(old, new)
+    templates = sorted(source.glob("sonic-slave-*/Dockerfile.j2"))
+    if not templates:
+        raise ValueError("Cannot invalidate cached build images for the download-hook fix")
+    updated = original[:start] + function + original[end:]
+    hook.write_text(updated)
+    # Base-image tags hash the generated Dockerfile, not the hook package.
+    # Invalidate old images so every build container installs the corrected hook.
+    stamp = hashlib.sha256(updated.encode()).hexdigest()[:16]
+    for template in templates:
+        with template.open("a") as stream:
+            stream.write(f"\n# sonic-vs-builder download-cache compatibility: {stamp}\n")
+    print("Applied upstream download-cache mirror-URL compatibility fix", flush=True)
+    return ["download-cache-mirror-url-restore"]
+
+
 def cache_settings(source, work, branch, mode="read-write", directory=None):
     """Use native dependency/version caches; never share raw target directories."""
     if mode not in ("read-write", "off"):
@@ -252,6 +293,7 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
     run("git", "-C", str(source), "checkout", "--detach", commit)
     if capture("git", "-C", str(source), "rev-parse", "HEAD") != commit:
         raise ValueError("Checkout differs from resolved upstream commit")
+    compatibility = fix_download_cache(source, cache_mode)
     cache_args = cache_settings(source, work, branch, cache_mode, cache_dir)
     filename = TARGETS[platform]
     for args in (("init",), ("configure", f"PLATFORM={platform}", "PLATFORM_ARCH=amd64"),
@@ -259,7 +301,7 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
         run("make", "UNATTENDED=y", *cache_args, *args, cwd=source)
     archive = source / "target" / filename
     metadata = {"upstream": UPSTREAM, "branch": branch, "commit": commit,
-                "platform": platform, "filename": filename}
+                "platform": platform, "filename": filename, "compatibility_fixes": compatibility}
     if platform == "vs":
         image = archive_image(archive)
         existed = subprocess.run(["docker", "image", "inspect", image],

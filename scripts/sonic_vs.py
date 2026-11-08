@@ -149,6 +149,29 @@ def fix_download_cache(source, mode):
     return ["download-cache-mirror-url-restore"]
 
 
+def fix_cached_rsync_cleanup(source, mode):
+    """Keep rsync where upstream's multi-stage image assembly requires it."""
+    cleanup = source / "src/sonic-build-hooks/scripts/post_run_cleanup"
+    macros = source / "dockers/dockerfile-macros.j2"
+    command = "/usr/bin/apt-get purge -y --auto-remove rsync"
+    if mode == "off" or not cleanup.is_file() or not macros.is_file():
+        return []
+    original = cleanup.read_text()
+    if command not in original or "rsync_from_builder_stage()" not in macros.read_text():
+        return []
+    templates = sorted(source.glob("dockers/docker-base*/Dockerfile.j2"))
+    if original.count(command) != 1 or not templates:
+        raise ValueError("Unrecognized upstream rsync cleanup; select cache_mode=off until reviewed")
+    updated = original.replace(command, ": # sonic-vs-builder: retain rsync for downstream image assembly")
+    cleanup.write_text(updated)
+    stamp = hashlib.sha256(updated.encode()).hexdigest()[:16]
+    for template in templates:
+        with template.open("a") as stream:
+            stream.write(f"\n# sonic-vs-builder cached-rsync cleanup compatibility: {stamp}\n")
+    print("Retained rsync required by upstream multi-stage image assembly", flush=True)
+    return ["cached-rsync-cleanup"]
+
+
 def cache_settings(source, work, branch, mode="read-write", directory=None):
     """Use native dependency/version caches; never share raw target directories."""
     if mode not in ("read-write", "off"):
@@ -294,6 +317,7 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
     if capture("git", "-C", str(source), "rev-parse", "HEAD") != commit:
         raise ValueError("Checkout differs from resolved upstream commit")
     compatibility = fix_download_cache(source, cache_mode)
+    compatibility += fix_cached_rsync_cleanup(source, cache_mode)
     cache_args = cache_settings(source, work, branch, cache_mode, cache_dir)
     filename = TARGETS[platform]
     for args in (("init",), ("configure", f"PLATFORM={platform}", "PLATFORM_ARCH=amd64"),

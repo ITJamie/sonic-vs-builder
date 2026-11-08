@@ -20,6 +20,8 @@ Open **Actions → Build SONiC images → Run workflow** on `main`. Enter a bran
 
 `cache_mode=read-write` is enabled by default. Select `off` to bypass the persistent caches for a diagnostic build; this does not erase them.
 
+`docker_layer_cache=true` is also enabled by default, independently of `cache_mode`. On branches implementing upstream's `SONIC_CONFIG_USE_DOCKER_CACHE` switch, this permits reuse of Docker layers when a container must be rebuilt. Set it to `false` for upstream's `--no-cache` rebuild behavior. Older branches without the switch retain their existing behavior and log that limitation. Completed build-container images can still be reused by their upstream-calculated tag with either setting; disabling layers does not force an existing image to rebuild.
+
 `publish_dockerhub=true` is enabled by default for VS builds. Set it to `false` for GHCR-only publication. Broadcom-only builds do not log in to or publish to either container registry.
 
 Using the GitHub CLI:
@@ -58,6 +60,8 @@ The builder also detects cached cleanup scripts that purge `rsync` despite downs
 To choose another disk, set the repository Actions variable **`SONIC_CACHE_DIR`** to an absolute host path owned by `github-runner`, for example `/mnt/nvme/sonic-vs-cache`. The default needs no manual directory setup. For local builds, use the same environment variable or `build --cache-dir /absolute/path`. Paths must be outside the temporary work directory and use only letters, numbers, `/`, `_`, `.` and `-`, as required for safe Make variable forwarding. The cache filesystem must have 300 GiB free before building.
 
 Cache locations and mode are printed in the build log and retained in `cache.json` alongside each platform's Actions log artifact. See the [runner guide](docs/runner.md#persistent-cache-maintenance) for disk usage and reset instructions.
+
+Docker image layers are stored separately in the runner's Docker storage, not `~/.cache/sonic-vs-builder`, and are not uploaded to GitHub Actions. Layer-cache support, requested/effective mode and the invalidation key are retained in `docker-cache.json` and successful image metadata. The native switch can also enable layer reuse for runtime image builds on supported branches. Before configuration, the builder adds an `ARG` immediately after each `FROM` in its build/runtime Dockerfile templates. Its value hashes upstream constraint files, build-hook contents and branch patch identities. Docker includes that argument in subsequent `RUN` cache keys, so changes rerun installation steps rather than merely changing the completed image tag. Ordinary `COPY`/`ADD` checks still track other context changes. The key is stable across fresh workspaces with identical inputs; a key change deliberately refreshes affected images. This does not guarantee fresh unpinned remote downloads or base tags: Docker may retain an existing base image, and unchanged download commands can reuse old layers. For freshness investigations, follow the runner guide's maintenance steps. There is no automatic host-wide pruning.
 
 ## Downloadable releases
 

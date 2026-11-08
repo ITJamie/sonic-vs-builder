@@ -133,6 +133,53 @@ def apply_branch_patches(source, work, branch, patch_root=None):
     return results
 
 
+def docker_cache_settings(source, enabled):
+    """Use the native opt-in only when this checkout implements its switch."""
+    wrapper = source / "Makefile.work"
+    supported = wrapper.is_file() and bool(re.search(
+        r"ifneq\s*\(\s*\$\(strip\s+\$\(SONIC_CONFIG_USE_DOCKER_CACHE\)\)\s*,\s*y\s*\)",
+        wrapper.read_text()))
+    settings = {"requested": enabled, "supported": supported, "enabled": enabled and supported}
+    if not supported:
+        print("Upstream Docker layer-cache switch unsupported; retaining upstream behavior", flush=True)
+        return [], settings
+    print(f"Docker layer cache: {'enabled' if enabled else 'disabled'}", flush=True)
+    return [f"SONIC_CONFIG_USE_DOCKER_CACHE={'y' if enabled else 'n'}"], settings
+
+
+def stamp_docker_cache_inputs(source, patches):
+    """Invalidate installation layers when constraints, hooks or patches change."""
+    inputs = sorted(path for path in (source / "files/build").glob("versions*/**/versions-*")
+                    if path.is_file())
+    hooks = source / "src/sonic-build-hooks"
+    inputs += sorted(path for path in hooks.rglob("*") if path.is_file()
+                     and not any(part.startswith(".") or part == "__pycache__"
+                                 for part in path.relative_to(hooks).parts)
+                     and path.suffix != ".pyc")
+    identities = [{"path": str(path.relative_to(source)), "sha256": checksum(path)} for path in inputs]
+    patch_ids = [{"path": item["path"], "sha256": item["sha256"]} for item in patches]
+    digest = hashlib.sha256(json.dumps({"inputs": identities, "patches": patch_ids},
+                                      sort_keys=True).encode()).hexdigest()
+    templates = sorted(source.glob("sonic-slave-*/Dockerfile*.j2"))
+    for directory in ("dockers", "platform"):
+        templates += sorted((source / directory).glob("**/Dockerfile*.j2"))
+    stages = 0
+    for template in templates:
+        text = re.sub(r"(?m)^ARG SONIC_VS_BUILDER_LAYER_INPUTS=[0-9a-f]+\n", "", template.read_text())
+        def stamp(match):
+            if match[0].rstrip().endswith("\\"):
+                raise ValueError(f"Review multiline FROM before enabling layer cache: {template}")
+            return match[0] + f"\nARG SONIC_VS_BUILDER_LAYER_INPUTS={digest}"
+        updated, count = re.subn(r"(?m)^FROM[^\n]+", stamp, text)
+        if count:
+            template.write_text(updated)
+            stages += count
+    if not stages:
+        raise ValueError("Cannot protect Docker layer cache: no Dockerfile stages found")
+    print(f"Docker layer input key: {digest} ({len(inputs)} constraint/hook files)", flush=True)
+    return {"input_sha256": digest, "input_files": len(inputs), "stamped_stages": stages}
+
+
 def permissions_image():
     """Small local utility image; avoids granting the runner unrestricted sudo."""
     dockerfile = Path(__file__).with_name("Dockerfile.tools")
@@ -360,7 +407,8 @@ def smoke(image):
         "/usr/local/bin/supervisord --version; rsync --version; sonic-cfggen --help")
 
 
-def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", cache_dir=None):
+def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", cache_dir=None,
+          docker_layer_cache=True):
     work = owned_work(work)
     if platform not in TARGETS:
         raise ValueError("Unsupported build platform")
@@ -379,16 +427,21 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
     compatibility = fix_download_cache(source, cache_mode)
     compatibility += fix_cached_rsync_cleanup(source, cache_mode)
     cache_args = cache_settings(source, work, branch, cache_mode, cache_dir)
+    docker_args, docker_cache = docker_cache_settings(source, docker_layer_cache)
+    write_json(work / "docker-cache.json", docker_cache)
     filename = TARGETS[platform]
-    run("make", "UNATTENDED=y", *cache_args, "init", cwd=source)
+    run("make", "UNATTENDED=y", *cache_args, *docker_args, "init", cwd=source)
     patches = apply_branch_patches(source, work, branch)
+    if docker_cache["enabled"]:
+        docker_cache.update(stamp_docker_cache_inputs(source, patches))
+        write_json(work / "docker-cache.json", docker_cache)
     for args in (("configure", f"PLATFORM={platform}", "PLATFORM_ARCH=amd64"),
                  (f"SONIC_BUILD_JOBS={jobs}", f"target/{filename}")):
-        run("make", "UNATTENDED=y", *cache_args, *args, cwd=source)
+        run("make", "UNATTENDED=y", *cache_args, *docker_args, *args, cwd=source)
     archive = source / "target" / filename
     metadata = {"upstream": UPSTREAM, "branch": branch, "commit": commit,
                 "platform": platform, "filename": filename, "compatibility_fixes": compatibility,
-                "patches": patches}
+                "patches": patches, "docker_layer_cache": docker_cache}
     if platform == "vs":
         image = archive_image(archive)
         existed = subprocess.run(["docker", "image", "inspect", image],
@@ -518,6 +571,7 @@ def main():
             command.add_argument("--platform", choices=TARGETS, default="vs")
             command.add_argument("--cache-mode", choices=("read-write", "off"), default="read-write")
             command.add_argument("--cache-dir", help="Persistent cache root (or SONIC_CACHE_DIR; defaults to ~/.cache/sonic-vs-builder)")
+            command.add_argument("--docker-layer-cache", choices=("true", "false"), default="true")
         if name == "publish":
             command.add_argument("--repository", required=True)
             command.add_argument("--dockerhub", choices=("true", "false"), default="false")
@@ -529,7 +583,8 @@ def main():
         (work / MARKER).touch()
         print(work)
     elif args.command == "build":
-        build(args.work, args.branch, args.commit, args.build_jobs, args.platform, args.cache_mode, args.cache_dir)
+        build(args.work, args.branch, args.commit, args.build_jobs, args.platform, args.cache_mode, args.cache_dir,
+              args.docker_layer_cache == "true")
     elif args.command == "publish":
         publish(args.work, args.repository, args.dockerhub == "true")
     else:

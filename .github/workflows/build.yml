@@ -35,6 +35,11 @@ on:
         required: true
         default: true
         type: boolean
+      docker_layer_cache:
+        description: Reuse Docker layers when rebuilding containers (supported branches)
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -95,6 +100,9 @@ jobs:
         if: ${{ contains(matrix.images, 'vs') }}
         id: vs_work
         run: echo "path=$(python3 scripts/sonic_vs.py create-work)" >> "$GITHUB_OUTPUT"
+      - name: Docker storage before builds
+        continue-on-error: true
+        run: docker system df
       - name: Build and validate VS
         if: ${{ contains(matrix.images, 'vs') }}
         env:
@@ -103,9 +111,10 @@ jobs:
           COMMIT: ${{ matrix.commit }}
           BUILD_JOBS: ${{ inputs.build_jobs }}
           CACHE_MODE: ${{ inputs.cache_mode }}
+          DOCKER_LAYER_CACHE: ${{ inputs.docker_layer_cache }}
         run: |
           set -o pipefail
-          python3 -u scripts/sonic_vs.py build --platform vs --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" 2>&1 | tee "$WORK/build.log"
+          python3 -u scripts/sonic_vs.py build --platform vs --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" 2>&1 | tee "$WORK/build.log"
       - name: Publish validated VS image to selected registries
         if: ${{ contains(matrix.images, 'vs') }}
         env:
@@ -137,6 +146,7 @@ jobs:
             ${{ steps.vs_work.outputs.path }}/release.json
             ${{ steps.vs_work.outputs.path }}/cache.json
             ${{ steps.vs_work.outputs.path }}/patches.json
+            ${{ steps.vs_work.outputs.path }}/docker-cache.json
           retention-days: 14
           if-no-files-found: warn
       - name: Clean VS workspace before continuing
@@ -156,9 +166,10 @@ jobs:
           COMMIT: ${{ matrix.commit }}
           BUILD_JOBS: ${{ inputs.build_jobs }}
           CACHE_MODE: ${{ inputs.cache_mode }}
+          DOCKER_LAYER_CACHE: ${{ inputs.docker_layer_cache }}
         run: |
           set -o pipefail
-          python3 -u scripts/sonic_vs.py build --platform broadcom --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" 2>&1 | tee "$WORK/build.log"
+          python3 -u scripts/sonic_vs.py build --platform broadcom --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" 2>&1 | tee "$WORK/build.log"
       - name: Stage Broadcom downloads in draft release
         if: ${{ contains(matrix.images, 'broadcom') }}
         env:
@@ -179,6 +190,7 @@ jobs:
             ${{ steps.broadcom_work.outputs.path }}/release.json
             ${{ steps.broadcom_work.outputs.path }}/cache.json
             ${{ steps.broadcom_work.outputs.path }}/patches.json
+            ${{ steps.broadcom_work.outputs.path }}/docker-cache.json
           retention-days: 14
           if-no-files-found: warn
       - name: Clean Broadcom workspace before continuing
@@ -191,3 +203,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGES: ${{ inputs.images }}
         run: python3 scripts/releases.py finish --repository "$REPOSITORY" --tag "$RELEASE_TAG" --images "$IMAGES"
+      - name: Docker storage after builds
+        if: ${{ always() }}
+        continue-on-error: true
+        run: docker system df

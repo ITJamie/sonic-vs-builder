@@ -26,6 +26,11 @@ build/runtime Dockerfile templates, refreshing affected cached images when the
 patch set changes. Native SONiC dependency checks still control package reuse;
 the patch mechanism does not erase persistent caches.
 
+When Docker layer caching is enabled on a supported branch, a separate early-stage
+`ARG` also hashes patches, constraints and build hooks. This invalidates installation
+layers when fixes change; the comment stamp alone only changes the completed image
+tag and is insufficient for this purpose.
+
 For each patch, explain the reason in its header, link the upstream issue/PR,
 record a tested upstream commit, and specify when it should be removed. Keep
 changes narrow and preserve upstream tests. Add a regression test when fixing

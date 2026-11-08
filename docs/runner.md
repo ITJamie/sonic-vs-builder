@@ -83,6 +83,37 @@ Substitute your configured cache root when using `SONIC_CACHE_DIR`. The cache ha
 
 For troubleshooting without clearing data, dispatch with `cache_mode=off`. Both native cache methods are disabled for that run and the persistent cache is preserved. A cache from an older build cannot make an unsupported source branch buildable; upstream build dependencies still need to be available.
 
+Docker layers are controlled separately by `docker_layer_cache` (default `true`).
+The builder enables upstream's native switch where supported, retaining layers
+in the Docker data directory across jobs. Set it to `false` to disable layer
+reuse during a rebuild. This still permits reuse of an existing completed image
+whose upstream tag matches. Inspect `docker-cache.json` for effective support,
+mode and the constraint/hook/patch input key.
+
+Each build job reports `docker system df` before and after building, including
+after failures. These reporting steps do not block builds if reporting fails.
+
+For a fresh-image investigation, first stop the runner and confirm no build is
+active. Record and remove only the specific completed build-container tags shown
+in the affected build log, then dispatch with `docker_layer_cache=false`. This
+forces those missing images to rebuild without layer reuse. Remote base tags and
+unpinned downloads are not made immutable by caching; refresh an exact base tag
+explicitly with `docker pull <base-image:tag>` if that is the investigation's goal.
+
+This runner is dedicated to SONiC. If storage becomes constrained, an explicit
+maintenance option while no builds are active is:
+
+```console
+docker builder prune --all --keep-storage 20GB
+docker system df
+```
+
+The prune command removes unused Docker build cache across the host, including
+cache from other projects if present; it can make later image rebuilds slower.
+It does not remove completed image tags or the native package/download caches.
+The workflow does not run it automatically. Never remove containerd snapshot
+directories manually.
+
 After a host crash or forced process termination, stop the runner and verify no build containers are active. Inspect leftover work directories and preserve any logs you need, then invoke cleanup on each verified project-owned directory:
 
 ```console

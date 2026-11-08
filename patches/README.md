@@ -5,7 +5,7 @@ matches the exact workflow `branches` entry, not this builder's Git branch.
 Use numbered filenames such as `0001-fix-description.patch`; files apply in
 lexicographic order. Branches without patch files receive no branch patches.
 
-Both VS and Broadcom builds apply the selected files after `make init` initializes
+VS Docker, KVM and Broadcom builds apply the selected files after `make init` initializes
 the pinned submodules, and before configuration/building. Patches apply even with
 `cache_mode=off`. Paths are relative to the sonic-buildimage checkout; use
 `a/...` and `b/...` paths as emitted by `git diff`. To patch a file within a
@@ -46,3 +46,9 @@ are recorded under `compatibility_fixes`.
   Tested against `8076a44fa579fde75f73299f03e7f3cac298d9e3`; CI reproduces
   the original resolver failure and verifies installation, `pip check`, and
   imports/basic execution under Linux amd64 Python 3.11 (Bookworm).
+- `202605/0002-fix-vs-pycparser-package-ownership.patch`: remove the Debian-owned
+  `python3-pycparser` package immediately before VS runtime wheel installation,
+  allowing pip to install upstream's pinned `pycparser==3.0`. Tracks
+  [sonic-buildimage #30609](https://github.com/sonic-net/sonic-buildimage/issues/30609).
+  The regression test reproduces the distutils uninstall error and verifies the
+  package removal followed by pip installation. No runtime version pins change.

@@ -30,6 +30,10 @@ jobs:
         run: python3 tests/branch_patches_integration.py
       - name: Docker layer cache reuse and invalidation
         run: python3 tests/docker_layer_cache_integration.py
+      - name: VS runtime Debian and pip package ownership regression
+        run: python3 tests/vs_pycparser_integration.py
+      - name: Docker archive load identity and tag preservation
+        run: python3 tests/docker_load_integration.py
       - name: Install workflow checker
         env:
           GOBIN: ${{ runner.temp }}/actionlint-bin

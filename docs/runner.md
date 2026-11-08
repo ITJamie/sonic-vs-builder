@@ -53,6 +53,14 @@ Each job creates a uniquely named `sonic-vs-*` directory in the runner's tempora
 
 Upstream may retain reusable build images and caches. These are not removed automatically because they are not all uniquely attributable to one job. Check `docker system df` and the free space before subsequent builds. Remove specific obsolete images or caches only when you have confirmed no build is active; configure host-specific maintenance outside this workflow.
 
+KVM output builds additionally require hardware virtualization. On a VM runner,
+enable nested virtualization/host CPU passthrough in the hypervisor, then reboot
+the runner. Check `ls -l /dev/kvm` and verify VMX or SVM appears in `/proc/cpuinfo`.
+Upstream launches QEMU/KVM inside its privileged build container. The KVM stage
+fails before cloning if the host KVM device is unavailable; Docker-only and
+Broadcom-only builds do not require it.
+
+
 ## Persistent cache maintenance
 
 The builder automatically creates `~/.cache/sonic-vs-builder` as the runner service account. It survives temporary workspace cleanup and is shared by later jobs on this host. A small cached Docker utility image supplies ACL tools; no additional host packages or sudo rules are needed. Before each cached build, it repairs existing cache permissions and sets inherited default ACLs so root hooks and the non-root build user can both write future cache files. Helpers run without networking and mount only the selected cache directory. GitHub-hosted validation jobs test this behavior in a temporary cache without populating the runner cache.

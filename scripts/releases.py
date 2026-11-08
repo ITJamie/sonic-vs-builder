@@ -12,7 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from sonic_vs import TARGETS, checksum, owned_work, write_json
+from sonic_vs import TARGETS, checksum, owned_work, selected_images, write_json
 
 ASSET_LIMIT = 2 * 1024**3  # GitHub requires strictly less than 2 GiB per asset.
 PART_SIZE = 1024**3
@@ -119,6 +119,10 @@ def stage(work, repository, tag, target):
         instructions += f"sha256sum -c {platform}-SHA256SUMS\n"
         if platform == "vs":
             instructions += f"docker load -i {filename}\n"
+        elif platform == "kvm":
+            instructions += (f"gzip -dk {filename}\n"
+                             "The decompressed sonic-vs.img is a QCOW2 disk for QEMU/KVM.\n"
+                             "Import it into your VM/lab system; configure resources and NICs for your topology.\n")
         else:
             instructions += "Use the verified sonic-broadcom.bin with ONIE on a supported switch.\n"
         metadata["release_assets"] = assets
@@ -136,7 +140,7 @@ def finish(repository, tag, images):
     existing = release(repository, tag)
     if not existing or not existing["draft"]:
         raise ValueError("Expected a draft release for this build")
-    expected = list(TARGETS) if images == "both" else [images]
+    expected = selected_images(images)
     # Paginate: split images can produce many assets.
     names = set()
     for page in range(1, 12):
@@ -165,7 +169,7 @@ def main():
     parser.add_argument("--tag", required=True)
     parser.add_argument("--work")
     parser.add_argument("--target")
-    parser.add_argument("--images", choices=("both", *TARGETS), default="both")
+    parser.add_argument("--images", choices=("all", "both", *TARGETS), default="all")
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repository):
         raise ValueError("Expected GitHub owner/repository")

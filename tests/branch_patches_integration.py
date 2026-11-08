@@ -26,9 +26,14 @@ with tempfile.TemporaryDirectory() as directory:
     target.parent.mkdir(parents=True)
     original = urllib.request.urlopen(URL, timeout=60).read().decode()
     target.write_text(original)
+    template = source / "platform/vs/docker-sonic-vs/Dockerfile.j2"
+    template.parent.mkdir(parents=True)
+    template_url = f"https://raw.githubusercontent.com/sonic-net/sonic-buildimage/{COMMIT}/platform/vs/docker-sonic-vs/Dockerfile.j2"
+    template.write_text(urllib.request.urlopen(template_url, timeout=60).read().decode())
     subprocess.run(["git", "init", "-q", str(source)], check=True)
     result = apply_branch_patches(source, work, "202605")
-    assert len(result) == 1 and result[0]["status"] == "applied"
+    assert len(result) == 2 and all(item["status"] == "applied" for item in result)
+    assert template.read_text().index("RUN apt-get remove -y python3-pycparser") < template.read_text().index("# Install locally-built Python wheel dependencies")
     assert target.read_text() == original.replace("wcwidth==0.7.0\n", "wcwidth==0.9.2\n")
     assert apply_branch_patches(source, work, "202605")[0]["status"] == "already-applied"
     (work / "broken.txt").write_text(relevant(original))

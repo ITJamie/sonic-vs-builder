@@ -11,12 +11,14 @@ on:
       images:
         description: Images to build and attach to the release
         required: true
-        default: both
+        default: all
         type: choice
         options:
-          - both
+          - all
           - vs
+          - kvm
           - broadcom
+          - both
       build_jobs:
         description: Parallel upstream build jobs per platform
         required: true
@@ -55,7 +57,7 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Check Docker Hub secret configuration
-        if: ${{ inputs.publish_dockerhub && inputs.images != 'broadcom' }}
+        if: ${{ inputs.publish_dockerhub && (inputs.images == 'all' || inputs.images == 'both' || inputs.images == 'vs') }}
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -153,6 +155,50 @@ jobs:
         if: ${{ always() && steps.vs_work.outputs.path != '' }}
         env:
           WORK: ${{ steps.vs_work.outputs.path }}
+        run: python3 scripts/sonic_vs.py cleanup --work "$WORK"
+      - name: Create KVM workspace
+        if: ${{ contains(matrix.images, 'kvm') }}
+        id: kvm_work
+        run: echo "path=$(python3 scripts/sonic_vs.py create-work)" >> "$GITHUB_OUTPUT"
+      - name: Build and validate KVM
+        if: ${{ contains(matrix.images, 'kvm') }}
+        env:
+          WORK: ${{ steps.kvm_work.outputs.path }}
+          BRANCH: ${{ matrix.branch }}
+          COMMIT: ${{ matrix.commit }}
+          BUILD_JOBS: ${{ inputs.build_jobs }}
+          CACHE_MODE: ${{ inputs.cache_mode }}
+          DOCKER_LAYER_CACHE: ${{ inputs.docker_layer_cache }}
+        run: |
+          set -o pipefail
+          python3 -u scripts/sonic_vs.py build --platform kvm --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" 2>&1 | tee "$WORK/build.log"
+      - name: Stage KVM downloads in draft release
+        if: ${{ contains(matrix.images, 'kvm') }}
+        env:
+          WORK: ${{ steps.kvm_work.outputs.path }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          python3 -u scripts/releases.py stage --work "$WORK" --repository "$REPOSITORY" --tag "$RELEASE_TAG" --target "$BUILDER_COMMIT" 2>&1 | tee "$WORK/release.log"
+      - name: Retain KVM logs and metadata
+        if: ${{ always() && steps.kvm_work.outputs.path != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sonic-kvm-${{ matrix.branch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.kvm_work.outputs.path }}/*.log
+            ${{ steps.kvm_work.outputs.path }}/metadata.json
+            ${{ steps.kvm_work.outputs.path }}/validated.json
+            ${{ steps.kvm_work.outputs.path }}/release.json
+            ${{ steps.kvm_work.outputs.path }}/cache.json
+            ${{ steps.kvm_work.outputs.path }}/patches.json
+            ${{ steps.kvm_work.outputs.path }}/docker-cache.json
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Clean KVM workspace before continuing
+        if: ${{ always() && steps.kvm_work.outputs.path != '' }}
+        env:
+          WORK: ${{ steps.kvm_work.outputs.path }}
         run: python3 scripts/sonic_vs.py cleanup --work "$WORK"
       - name: Create Broadcom workspace
         if: ${{ contains(matrix.images, 'broadcom') }}

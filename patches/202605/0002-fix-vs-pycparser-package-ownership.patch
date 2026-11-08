@@ -1,0 +1,23 @@
+Subject: [202605] Remove Debian pycparser before installing VS runtime wheels
+
+The inherited image contains Debian pycparser 2.21, but VS runtime constraints
+select pycparser 3.0. Pip cannot uninstall the distutils-managed Debian package.
+Remove it using apt before the wheel installation, preserving upstream pins.
+
+Upstream issue: https://github.com/sonic-net/sonic-buildimage/issues/30609
+Precedent: https://github.com/sonic-net/sonic-buildimage/pull/1820
+Verified source: 8076a44fa579fde75f73299f03e7f3cac298d9e3.
+Remove once upstream handles Debian/pip package ownership in this image.
+
+--- a/platform/vs/docker-sonic-vs/Dockerfile.j2
++++ b/platform/vs/docker-sonic-vs/Dockerfile.j2
+@@ -106,6 +106,9 @@
+ # Copy locally-built Python wheel dependencies
+ {{ copy_files("python-wheels/", docker_sonic_vs_whls.split(' '), "/python-wheels/") }}
+ 
++# Remove the Debian-owned distutils package before pip installs pinned pycparser.
++RUN apt-get remove -y python3-pycparser
++
+ # Install locally-built Python wheel dependencies
+ {{ install_python_wheels(docker_sonic_vs_whls.split(' ')) }}
+ {% endif %}

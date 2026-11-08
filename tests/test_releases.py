@@ -103,6 +103,37 @@ class ReleaseTests(unittest.TestCase):
         releases.finish(REPO, DRAFT["tag_name"], "both")
         api.assert_called_with(REPO, "/releases/42", "PATCH", {"draft": False, "make_latest": "false"})
 
+    @patch.object(releases, "release", return_value=DRAFT)
+    @patch.object(releases, "api")
+    def test_all_requires_kvm_assets_before_publication(self, api, _release):
+        names = [f"{platform}-{suffix}" for platform in ("vs", "kvm", "broadcom")
+                 for suffix in ("metadata.json", "SHA256SUMS", "README.txt")]
+        names.extend(["docker-sonic-vs.gz", "sonic-broadcom.bin"])
+        api.return_value = [{"name": name} for name in names]
+        with self.assertRaisesRegex(ValueError, "sonic-vs.img.gz"):
+            releases.finish(REPO, DRAFT["tag_name"], "all")
+        self.assertTrue(all(call.args[1].endswith("page=1") for call in api.call_args_list))
+        api.reset_mock()
+        api.side_effect = [[{"name": name} for name in [*names, "sonic-vs.img.gz.part0001"]],
+                           {**DRAFT, "draft": False}]
+        releases.finish(REPO, DRAFT["tag_name"], "all")
+        api.assert_called_with(REPO, "/releases/42", "PATCH", {"draft": False, "make_latest": "false"})
+
+    @patch.object(releases, "release", return_value=DRAFT)
+    @patch.object(releases, "upload")
+    def test_kvm_release_has_disk_instructions_and_metadata(self, upload, _release):
+        disk = self.source.parent / "sonic-vs.img.gz"
+        disk.write_bytes(b"validated compressed disk")
+        metadata = json.loads((self.work / "validated.json").read_text())
+        metadata.update(platform="kvm", sha256=checksum(disk))
+        write_json(self.work / "validated.json", metadata)
+        uploaded = {}
+        upload.side_effect = lambda repo, rid, path: uploaded.update({path.name: path.read_bytes()})
+        releases.stage(self.work, REPO, DRAFT["tag_name"], "b" * 40)
+        self.assertIn(b"gzip -dk sonic-vs.img.gz", uploaded["kvm-README.txt"])
+        self.assertIn(b"QCOW2", uploaded["kvm-README.txt"])
+        self.assertNotIn(b"ONIE", uploaded["kvm-README.txt"])
+
     @patch.object(releases.urllib.request, "urlopen")
     def test_asset_upload_streams_file_with_explicit_length(self, urlopen):
         def response(request, **kwargs):

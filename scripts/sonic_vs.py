@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Build upstream SONiC VS/Broadcom images and publish VS to GHCR (stdlib only)."""
+"""Build upstream SONiC VS Docker, KVM and Broadcom images and publish VS to GHCR (stdlib only)."""
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
@@ -17,7 +18,7 @@ UPSTREAM = "https://github.com/sonic-net/sonic-buildimage.git"
 TAG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z", re.ASCII)
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 MARKER = ".sonic-vs-builder"
-TARGETS = {"vs": "docker-sonic-vs.gz", "broadcom": "sonic-broadcom.bin"}
+TARGETS = {"vs": "docker-sonic-vs.gz", "kvm": "sonic-vs.img.gz", "broadcom": "sonic-broadcom.bin"}
 PATCHES = Path(__file__).resolve().parents[1] / "patches"
 
 
@@ -56,10 +57,19 @@ def branches(value):
     return result
 
 
-def prepare(value, jobs, images="both"):
+def selected_images(images):
+    if images == "all":
+        return list(TARGETS)
+    if images == "both":
+        return ["vs", "broadcom"]  # Preserve existing callers' two-image selection.
+    if images in TARGETS:
+        return [images]
+    raise ValueError("images must be all, both, vs, kvm or broadcom")
+
+
+def prepare(value, jobs, images="all"):
     positive(jobs)
-    if images not in ("both", *TARGETS):
-        raise ValueError("images must be both, vs or broadcom")
+    selected = selected_images(images)
     entries = []
     for branch in branches(value):
         ref = f"refs/heads/{branch}"
@@ -68,7 +78,7 @@ def prepare(value, jobs, images="both"):
         if len(matches) != 1 or not SHA.fullmatch(matches[0][0]):
             raise ValueError(f"Cannot resolve upstream branch: {branch}")
         entries.append({"branch": branch, "commit": matches[0][0],
-                        "images": list(TARGETS) if images == "both" else [images]})
+                        "images": selected})
     return {"include": entries}
 
 
@@ -334,7 +344,7 @@ def cache_settings(source, work, branch, mode="read-write", directory=None):
     return arguments
 
 
-def preflight(work):
+def preflight(work, require_kvm=False):
     if sys.platform != "linux" or os.uname().machine != "x86_64" or os.geteuid() == 0:
         raise ValueError("Builds require a non-root Linux x86_64 user")
     for command in ("git", "make", "docker", "j2"):
@@ -355,6 +365,8 @@ def preflight(work):
     if memory < 15 * 1024**3:
         raise ValueError("Use a host with at least 16 GB RAM")
     run("sudo", "-n", "modprobe", "overlay")
+    if require_kvm and not Path("/dev/kvm").is_char_device():
+        raise ValueError("KVM image creation requires /dev/kvm; enable hardware/nested virtualization on the runner")
 
 
 def archive_image(archive):
@@ -374,15 +386,25 @@ def load_untagged(archive):
     """Strip upstream tags while streaming, so existing host tags cannot be replaced."""
     import io
 
-    process = subprocess.Popen(["docker", "load"], stdin=subprocess.PIPE)
+    # Containerd-backed Docker can report an image ID different from the legacy
+    # config hash. Capture Docker's authoritative result without buffering the tar.
+    output = tempfile.TemporaryFile(mode="w+")
+    process = subprocess.Popen(["docker", "load"], stdin=subprocess.PIPE, stdout=output)
     try:
         with tarfile.open(archive, "r|gz") as source, tarfile.open(fileobj=process.stdin, mode="w|") as target:
             for member in source:
                 data = source.extractfile(member) if member.isfile() else None
-                if member.name == "manifest.json":
+                if member.name in ("manifest.json", "index.json"):
                     manifest = json.load(data)
-                    for entry in manifest:
-                        entry["RepoTags"] = []
+                    if member.name == "manifest.json":
+                        for entry in manifest:
+                            entry["RepoTags"] = []
+                    else:
+                        # Containerd-backed Docker also stores names in OCI's index.
+                        for entry in manifest.get("manifests", []):
+                            annotations = entry.get("annotations", {})
+                            annotations.pop("io.containerd.image.name", None)
+                            annotations.pop("org.opencontainers.image.ref.name", None)
                     content = json.dumps(manifest).encode()
                     member.size = len(content)
                     data = io.BytesIO(content)
@@ -392,10 +414,18 @@ def load_untagged(archive):
         process.stdin.close()
         if process.wait() != 0:
             raise ValueError("docker load failed")
+        output.seek(0)
+        loaded = output.read()
+        print(loaded, end="", flush=True)
+        identities = re.findall(r"(?m)^Loaded image ID: (sha256:[0-9a-f]{64})\s*$", loaded)
+        if len(identities) != 1:
+            raise ValueError("Cannot identify the single untagged image returned by docker load")
+        return identities[0]
     finally:
         if process.poll() is None:
             process.kill()
             process.wait()
+        output.close()
 
 
 def smoke(image):
@@ -407,6 +437,16 @@ def smoke(image):
         "/usr/local/bin/supervisord --version; rsync --version; sonic-cfggen --help")
 
 
+def validate_kvm(archive):
+    with gzip.open(archive, "rb") as stream:
+        header = stream.read(72)
+        if len(header) != 72 or header[:4] != b"QFI\xfb" or int.from_bytes(header[4:8], "big") not in (2, 3):
+            raise ValueError("KVM output is not a gzip-compressed QCOW2 image")
+        # Drain the stream to verify gzip truncation/CRC errors before release upload.
+        while stream.read(1024 * 1024):
+            pass
+
+
 def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", cache_dir=None,
           docker_layer_cache=True):
     work = owned_work(work)
@@ -415,7 +455,7 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
     if branches(branch) != [branch] or not SHA.fullmatch(commit):
         raise ValueError("Expected one validated branch and a full commit SHA")
     positive(jobs)
-    preflight(work)
+    preflight(work, require_kvm=platform == "kvm")
     source = work / "source"
     source.mkdir()
     run("git", "init", str(source))
@@ -430,27 +470,32 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
     docker_args, docker_cache = docker_cache_settings(source, docker_layer_cache)
     write_json(work / "docker-cache.json", docker_cache)
     filename = TARGETS[platform]
+    configured_platform = "vs" if platform == "kvm" else platform
     run("make", "UNATTENDED=y", *cache_args, *docker_args, "init", cwd=source)
     patches = apply_branch_patches(source, work, branch)
     if docker_cache["enabled"]:
         docker_cache.update(stamp_docker_cache_inputs(source, patches))
         write_json(work / "docker-cache.json", docker_cache)
-    for args in (("configure", f"PLATFORM={platform}", "PLATFORM_ARCH=amd64"),
+    for args in (("configure", f"PLATFORM={configured_platform}", "PLATFORM_ARCH=amd64"),
                  (f"SONIC_BUILD_JOBS={jobs}", f"target/{filename}")):
         run("make", "UNATTENDED=y", *cache_args, *docker_args, *args, cwd=source)
     archive = source / "target" / filename
     metadata = {"upstream": UPSTREAM, "branch": branch, "commit": commit,
                 "platform": platform, "filename": filename, "compatibility_fixes": compatibility,
-                "patches": patches, "docker_layer_cache": docker_cache}
+                "patches": patches, "docker_layer_cache": docker_cache,
+                "configured_platform": configured_platform}
     if platform == "vs":
-        image = archive_image(archive)
-        existed = subprocess.run(["docker", "image", "inspect", image],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-        # Persist cleanup ownership before loading or smoke testing can fail.
-        write_json(work / "image-state.json", {"image_id": image, "preexisting": existed})
-        load_untagged(archive)
+        config_digest = archive_image(archive)
+        previous_images = set(capture("docker", "image", "ls", "--all", "--quiet", "--no-trunc").splitlines())
+        image = load_untagged(archive)
+        # Persist the actual loaded identity before smoke testing can fail.
+        write_json(work / "image-state.json", {"image_id": image, "preexisting": image in previous_images})
         smoke(image)
         metadata["image_id"] = image
+        metadata["archive_image_config_digest"] = config_digest
+    elif platform == "kvm":
+        validate_kvm(archive)
+        metadata.update({"image_format": "qcow2", "compression": "gzip"})
     else:
         with archive.open("rb") as stream:
             if not stream.read(2) == b"#!" or archive.stat().st_size == 0:
@@ -559,7 +604,7 @@ def main():
     prep = sub.add_parser("prepare")
     prep.add_argument("--branches", required=True)
     prep.add_argument("--build-jobs", default="3")
-    prep.add_argument("--images", choices=("both", *TARGETS), default="both")
+    prep.add_argument("--images", choices=("all", "both", *TARGETS), default="all")
     sub.add_parser("create-work")
     for name in ("build", "publish", "cleanup"):
         command = sub.add_parser(name)

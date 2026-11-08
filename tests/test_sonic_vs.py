@@ -36,7 +36,7 @@ class Inputs(unittest.TestCase):
     def test_resolve_multiple_exact_refs(self, capture):
         capture.side_effect = [f"{COMMIT}\trefs/heads/202605", f"{COMMIT}\trefs/heads/202511"]
         matrix = builder.prepare("202605,202511", "1")
-        self.assertEqual(matrix, {"include": [{"branch": b, "commit": COMMIT, "images": ["vs", "broadcom"]}
+        self.assertEqual(matrix, {"include": [{"branch": b, "commit": COMMIT, "images": ["vs", "kvm", "broadcom"]}
                                               for b in ("202605", "202511")]})
 
     @patch.object(builder, "capture", return_value=f"{COMMIT}\trefs/heads/202605")
@@ -71,7 +71,10 @@ class WorkTests(unittest.TestCase):
         with tarfile.open(archive, "w:gz") as output:
             for filename, data in ((name, config), ("manifest.json", json.dumps([
                 {"Config": name, "RepoTags": ["docker-sonic-vs:latest"], "Layers": []}
-            ] * count).encode())):
+            ] * count).encode()), ("index.json", json.dumps({"schemaVersion": 2, "manifests": [
+                {"annotations": {"io.containerd.image.name": "docker.io/library/docker-sonic-vs:latest",
+                                 "org.opencontainers.image.ref.name": "latest", "keep": "value"}}
+            ]}).encode())):
                 member = tarfile.TarInfo(filename)
                 member.size = len(data)
                 output.addfile(member, io.BytesIO(data))
@@ -115,6 +118,8 @@ class WorkTests(unittest.TestCase):
 
         class LoadProcess:
             def __init__(self, *args, **kwargs):
+                kwargs["stdout"].write("Loaded image ID: sha256:" + "d" * 64 + "\n")
+                kwargs["stdout"].flush()
                 class Buffer(io.BytesIO):
                     def close(self):
                         self.saved = self.getvalue()
@@ -132,9 +137,10 @@ class WorkTests(unittest.TestCase):
 
         processes = []
         with patch.object(builder.subprocess, "Popen", LoadProcess):
-            builder.load_untagged(archive)
+            self.assertEqual(builder.load_untagged(archive), "sha256:" + "d" * 64)
         with tarfile.open(fileobj=io.BytesIO(processes[0].stdin.saved)) as loaded:
             self.assertEqual(json.load(loaded.extractfile("manifest.json"))[0]["RepoTags"], [])
+            self.assertEqual(json.load(loaded.extractfile("index.json"))["manifests"][0]["annotations"], {"keep": "value"})
 
     @patch.object(builder, "run")
     def test_publication_requires_successful_validation(self, run):
@@ -160,7 +166,7 @@ class WorkTests(unittest.TestCase):
     @patch.object(builder, "run")
     @patch.object(builder, "capture", return_value=COMMIT)
     @patch.object(builder, "archive_image", return_value="sha256:example")
-    @patch.object(builder, "load_untagged")
+    @patch.object(builder, "load_untagged", return_value="sha256:example")
     @patch.object(builder, "cache_settings", return_value=[])
     @patch.object(builder, "smoke", side_effect=subprocess.CalledProcessError(1, "docker"))
     @patch.object(builder, "apply_branch_patches", return_value=[])

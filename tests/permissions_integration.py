@@ -12,7 +12,8 @@ import sonic_vs as builder
 
 def container(image, path, user, command, environment=None):
     args = ["docker", "run", "--rm", "--network", "none", "--user", user,
-            "--mount", f"type=bind,source={path},target=/cache", "--entrypoint", "/bin/sh"]
+            "--mount", f"type=bind,source={path},target=/cache", "--workdir", "/cache",
+            "--entrypoint", "/bin/sh"]
     for name, value in (environment or {}).items():
         args.extend(["--env", f"{name}={value}"])
     subprocess.run([*args, image, "-ec", command], check=True)

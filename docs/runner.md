@@ -62,18 +62,19 @@ The layout is:
 ```text
 ~/.cache/sonic-vs-builder/
   v1/
-    branches/<branch>/amd64/packages/  # Native dependency-checked package cache
-    downloads/amd64/                  # Native version/download cache
+    branches/<branch>/amd64/packages/        # Native global package cache
+    branches/<branch>/amd64/local-packages/  # Native local cache for modified dependencies
+    downloads/amd64/                        # Native version/download cache
 ```
 
-Package caches are partitioned by upstream branch and architecture. Upstream's keys additionally distinguish platform, Debian build environment, source and dependencies; leave those checks enabled. Download storage is shared, with upstream's hooks providing their own image/version keys. Raw build directories remain separate and disposable.
+Both package-cache classes are partitioned by upstream branch and architecture. Upstream's keys additionally distinguish platform, Debian build environment, source and dependencies; leave those checks enabled. Our compatibility fixes modify tracked dependency files, so SONiC intentionally routes affected archives to its local cache. The workflow persists this directory using an additional bind mount at `/sonic/target/cache`, preserving it when the source workspace is deleted. Download storage is shared, with upstream's hooks providing their own image/version keys. Raw build directories remain separate and disposable.
 
 To use a different filesystem, prepare a directory for the service account and set repository Actions variable `SONIC_CACHE_DIR` to its absolute host path. The path is passed directly into the build container as a bind mount, so it must exist on the local Docker host. Check the chosen filesystem has at least 300 GiB free, in addition to the workspace and Docker storage checks. Avoid spaces or Make-special characters in its path.
 
 Inspect usage as the runner account:
 
 ```sh
-du -sh ~/.cache/sonic-vs-builder/v1/branches/* ~/.cache/sonic-vs-builder/v1/downloads
+du -sh ~/.cache/sonic-vs-builder/v1/branches/*/amd64/{packages,local-packages} ~/.cache/sonic-vs-builder/v1/downloads
 df -h ~/.cache/sonic-vs-builder
 docker system df
 ```

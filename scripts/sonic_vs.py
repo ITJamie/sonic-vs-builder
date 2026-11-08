@@ -186,6 +186,8 @@ def cache_settings(source, work, branch, mode="read-write", directory=None):
     for variable in ("SONIC_DPKG_CACHE_METHOD", "SONIC_DPKG_CACHE_SOURCE"):
         if variable not in config or variable not in makefile:
             raise ValueError("This branch lacks native package-cache support; select cache_mode=off")
+    if "DOCKER_BUILDER_USER_MOUNT" not in makefile:
+        raise ValueError("This branch cannot mount its local package cache; select cache_mode=off")
     configured = directory or os.environ.get("SONIC_CACHE_DIR") or str(Path.home() / ".cache/sonic-vs-builder")
     path = Path(configured).expanduser()
     if not path.is_absolute() or not re.fullmatch(r"/[A-Za-z0-9_./-]+", str(path)):
@@ -197,6 +199,7 @@ def cache_settings(source, work, branch, mode="read-write", directory=None):
     if root.is_relative_to(work.resolve()):
         raise ValueError("Persistent cache must be outside the temporary work directory")
     packages = root / "v1/branches" / branch / "amd64/packages"
+    local_packages = root / "v1/branches" / branch / "amd64/local-packages"
     downloads = root / "v1/downloads/amd64"
     package_source = str(packages)
     # 'cache' is the read/write spelling supported by old and current branches.
@@ -204,13 +207,18 @@ def cache_settings(source, work, branch, mode="read-write", directory=None):
     supports_downloads = all(variable in config and variable in makefile for variable in (
         "SONIC_VERSION_CACHE_METHOD", "SONIC_VERSION_CACHE_SOURCE"))
     packages.mkdir(parents=True, exist_ok=True)
+    local_packages.mkdir(parents=True, exist_ok=True)
     if supports_downloads:
         downloads.mkdir(parents=True, exist_ok=True)
         arguments.extend(["SONIC_VERSION_CACHE_METHOD=cache", f"SONIC_VERSION_CACHE_SOURCE={downloads}"])
     else:
         arguments.append("SONIC_VERSION_CACHE_METHOD=none")
         print("Upstream branch has no native download/version cache; package caching remains enabled", flush=True)
-    paths = (packages, downloads) if supports_downloads else (packages,)
+    # Modified dependency files intentionally route artifacts to target/cache.
+    # Persist that native path with a child bind mount, without altering its
+    # routing rules or pretending that our compatibility changes are clean Git.
+    arguments.append(f"DOCKER_BUILDER_USER_MOUNT={local_packages}:/sonic/target/cache")
+    paths = (packages, local_packages, downloads) if supports_downloads else (packages, local_packages)
     for location in paths:
         if shutil.disk_usage(location).free < 300 * 1024**3:
             raise ValueError(f"Need at least 300 GiB free on the cache filesystem containing {location}")
@@ -220,9 +228,11 @@ def cache_settings(source, work, branch, mode="read-write", directory=None):
         with tempfile.TemporaryFile(dir=location):
             pass
     details = {"mode": mode, "root": str(root), "packages": package_source,
+               "local_packages": str(local_packages),
                "downloads": str(downloads) if supports_downloads else None}
     write_json(work / "cache.json", details)
     print(f"Persistent package cache: {packages}", flush=True)
+    print(f"Persistent local package cache: {local_packages} (mounted at /sonic/target/cache)", flush=True)
     if supports_downloads:
         print(f"Persistent download cache: {downloads}", flush=True)
     return arguments

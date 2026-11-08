@@ -20,6 +20,8 @@ jobs:
         run: python3 -m compileall -q scripts tests
       - name: Docker cache permissions and cleanup integration
         run: python3 tests/permissions_integration.py
+      - name: Persistent local package cache integration
+        run: python3 tests/local_cache_integration.py
       - name: Upstream download cache regression
         run: python3 tests/download_hook_integration.py
       - name: Cached cleanup and final image assembly regression

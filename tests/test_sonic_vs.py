@@ -334,7 +334,7 @@ class CacheTests(unittest.TestCase):
         (self.source / "rules").mkdir(parents=True)
         self.variables = ("SONIC_DPKG_CACHE_METHOD", "SONIC_DPKG_CACHE_SOURCE",
                           "SONIC_VERSION_CACHE_METHOD", "SONIC_VERSION_CACHE_SOURCE")
-        self.config = "\n".join(f"{name} ?= none" for name in self.variables)
+        self.config = "\n".join(f"{name} ?= none" for name in self.variables) + "\n# DOCKER_BUILDER_USER_MOUNT\n"
         (self.source / "rules/config").write_text(self.config)
         (self.source / "Makefile.work").write_text(self.config)
         self.root = self.base / "persistent"
@@ -348,8 +348,10 @@ class CacheTests(unittest.TestCase):
     def test_cache_survives_workspace_cleanup_and_is_reused(self):
         args = builder.cache_settings(self.source, self.work, "202605", directory=str(self.root))
         packages = self.root / "v1/branches/202605/amd64/packages"
+        local_packages = self.root / "v1/branches/202605/amd64/local-packages"
         downloads = self.root / "v1/downloads/amd64"
         (packages / "package.tgz").write_bytes(b"dependency-checked package")
+        (local_packages / "modified-package.tgz").write_bytes(b"dependency-checked modified package")
         (downloads / "download.bin").write_bytes(b"versioned download")
         again = builder.cache_settings(self.source, self.work, "202605", directory=str(self.root))
         self.assertEqual(args, again)
@@ -357,11 +359,13 @@ class CacheTests(unittest.TestCase):
         self.assertIn(f"SONIC_VERSION_CACHE_SOURCE={downloads}", args)
         self.assertIn("SONIC_DPKG_CACHE_METHOD=cache", args)
         self.assertIn("SONIC_VERSION_CACHE_METHOD=cache", args)
-        self.permissions.assert_called_with((packages, downloads))
+        self.assertIn(f"DOCKER_BUILDER_USER_MOUNT={local_packages}:/sonic/target/cache", args)
+        self.permissions.assert_called_with((packages, local_packages, downloads))
         self.assertEqual((self.source / "rules/config").read_text(), self.config)
         self.assertEqual((self.source / "Makefile.work").read_text(), self.config)
         builder.cleanup(self.work)
         self.assertEqual((packages / "package.tgz").read_bytes(), b"dependency-checked package")
+        self.assertEqual((local_packages / "modified-package.tgz").read_bytes(), b"dependency-checked modified package")
         self.assertEqual((downloads / "download.bin").read_bytes(), b"versioned download")
 
     @patch.object(builder, "preflight")
@@ -391,6 +395,7 @@ class CacheTests(unittest.TestCase):
             self.assertIn(f"SONIC_DPKG_CACHE_SOURCE={self.root}/v1/branches/202605/amd64/packages", call.args)
             self.assertIn("SONIC_VERSION_CACHE_METHOD=cache", call.args)
             self.assertIn(f"SONIC_VERSION_CACHE_SOURCE={self.root}/v1/downloads/amd64", call.args)
+            self.assertIn(f"DOCKER_BUILDER_USER_MOUNT={self.root}/v1/branches/202605/amd64/local-packages:/sonic/target/cache", call.args)
 
     def test_platforms_share_cache_paths_but_branches_partition_packages(self):
         vs = builder.cache_settings(self.source, self.work, "202605", directory=str(self.root))
@@ -401,7 +406,7 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(vs[3], older[3])
 
     def test_old_branch_uses_package_cache_without_unsupported_download_cache(self):
-        old_config = "\n".join(f"{name} ?= none" for name in self.variables[:2])
+        old_config = "\n".join(f"{name} ?= none" for name in self.variables[:2]) + "\n# DOCKER_BUILDER_USER_MOUNT\n"
         (self.source / "rules/config").write_text(old_config)
         (self.source / "Makefile.work").write_text(old_config)
         args = builder.cache_settings(self.source, self.work, "202111", directory=str(self.root))
@@ -437,6 +442,11 @@ class CacheTests(unittest.TestCase):
     def test_unsupported_branch_reports_bypass_option(self):
         (self.source / "rules/config").write_text("")
         with self.assertRaisesRegex(ValueError, "cache_mode=off"):
+            builder.cache_settings(self.source, self.work, "202605", directory=str(self.root))
+
+    def test_missing_local_cache_mount_support_cannot_silently_discard_packages(self):
+        (self.source / "Makefile.work").write_text(self.config.replace("DOCKER_BUILDER_USER_MOUNT", ""))
+        with self.assertRaisesRegex(ValueError, "local package cache"):
             builder.cache_settings(self.source, self.work, "202605", directory=str(self.root))
 
 

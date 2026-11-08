@@ -1,0 +1,91 @@
+name: Build SONiC VS
+
+on:
+  workflow_dispatch:
+    inputs:
+      branches:
+        description: Comma-separated upstream branches (also used as image tags)
+        required: true
+        default: '202605'
+        type: string
+      build_jobs:
+        description: Parallel upstream build jobs per version
+        required: true
+        default: '1'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sonic-vs-build-host
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - id: matrix
+        env:
+          BRANCHES: ${{ inputs.branches }}
+          BUILD_JOBS: ${{ inputs.build_jobs }}
+        run: |
+          matrix=$(python3 scripts/sonic_vs.py prepare --branches "$BRANCHES" --build-jobs "$BUILD_JOBS")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    runs-on: [self-hosted, linux, x64, sonic-vs]
+    timeout-minutes: 1440
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Create isolated workspace
+        id: work
+        run: echo "path=$(python3 scripts/sonic_vs.py create-work)" >> "$GITHUB_OUTPUT"
+      - name: Build and smoke test
+        env:
+          WORK: ${{ steps.work.outputs.path }}
+          BRANCH: ${{ matrix.branch }}
+          COMMIT: ${{ matrix.commit }}
+          BUILD_JOBS: ${{ inputs.build_jobs }}
+        run: |
+          set -o pipefail
+          python3 -u scripts/sonic_vs.py build --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" 2>&1 | tee "$WORK/build.log"
+      - name: Publish validated image to GHCR
+        env:
+          WORK: ${{ steps.work.outputs.path }}
+          REPOSITORY: ${{ github.repository }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          python3 -u scripts/sonic_vs.py publish --work "$WORK" --repository "$REPOSITORY" 2>&1 | tee "$WORK/publish.log"
+      - name: Retain logs and metadata
+        if: ${{ always() && steps.work.outputs.path != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sonic-vs-${{ matrix.branch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.work.outputs.path }}/*.log
+            ${{ steps.work.outputs.path }}/metadata.json
+            ${{ steps.work.outputs.path }}/validated.json
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Clean project-owned workspace
+        if: ${{ always() && steps.work.outputs.path != '' }}
+        env:
+          WORK: ${{ steps.work.outputs.path }}
+        run: python3 scripts/sonic_vs.py cleanup --work "$WORK"

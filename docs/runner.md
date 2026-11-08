@@ -55,7 +55,7 @@ Upstream may retain reusable build images and caches. These are not removed auto
 
 ## Persistent cache maintenance
 
-The builder automatically creates `~/.cache/sonic-vs-builder` as the runner service account. It survives temporary workspace cleanup and is shared by later jobs on this host. No root access or additional packages are needed for the default location. GitHub-hosted validation jobs do not populate it.
+The builder automatically creates `~/.cache/sonic-vs-builder` as the runner service account. It survives temporary workspace cleanup and is shared by later jobs on this host. A small cached Docker utility image supplies ACL tools; no additional host packages or sudo rules are needed. Before each cached build, it repairs existing cache permissions and sets inherited default ACLs so root hooks and the non-root build user can both write future cache files. Helpers run without networking and mount only the selected cache directory. GitHub-hosted validation jobs test this behavior in a temporary cache without populating the runner cache.
 
 The layout is:
 
@@ -88,4 +88,4 @@ After a host crash or forced process termination, stop the runner and verify no 
 python3 scripts/sonic_vs.py cleanup --work /absolute/path/to/runner/_work/_temp/sonic-vs-EXAMPLE
 ```
 
-Cleanup refuses directories without the ownership marker. If upstream left root-owned files, inspect the exact directory and remove those files as an administrator. Also remove abandoned `sonic-vs-auth-*` credential directories after confirming they are unused. Do not print their contents. Restart the runner after recovery.
+Cleanup refuses directories without the ownership marker. If upstream leaves root-owned Docker data in `source/fsroot.docker.*`, cleanup uses the Docker utility image with only that marked workspace mounted to remove its `source` directory. Persistent caches are not mounted into this cleanup helper. If that fails, inspect the exact directory and remove those files as an administrator. Also remove abandoned `sonic-vs-auth-*` credential directories after confirming they are unused. Do not print their contents. Restart the runner after recovery.

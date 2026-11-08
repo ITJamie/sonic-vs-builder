@@ -341,6 +341,9 @@ class CacheTests(unittest.TestCase):
         disk = patch.object(builder.shutil, "disk_usage", return_value=SimpleNamespace(free=1024**4))
         disk.start()
         self.addCleanup(disk.stop)
+        permissions = patch.object(builder, "prepare_cache_permissions")
+        self.permissions = permissions.start()
+        self.addCleanup(permissions.stop)
 
     def test_cache_survives_workspace_cleanup_and_is_reused(self):
         args = builder.cache_settings(self.source, self.work, "202605", directory=str(self.root))
@@ -354,6 +357,7 @@ class CacheTests(unittest.TestCase):
         self.assertIn(f"SONIC_VERSION_CACHE_SOURCE={downloads}", args)
         self.assertIn("SONIC_DPKG_CACHE_METHOD=cache", args)
         self.assertIn("SONIC_VERSION_CACHE_METHOD=cache", args)
+        self.permissions.assert_called_with((packages, downloads))
         self.assertEqual((self.source / "rules/config").read_text(), self.config)
         self.assertEqual((self.source / "Makefile.work").read_text(), self.config)
         builder.cleanup(self.work)
@@ -410,6 +414,7 @@ class CacheTests(unittest.TestCase):
         args = builder.cache_settings(self.base / "nonexistent", self.work, "202605", "off", str(self.root))
         self.assertEqual(args, ["SONIC_DPKG_CACHE_METHOD=none", "SONIC_VERSION_CACHE_METHOD=none"])
         self.assertFalse(self.root.exists())
+        self.permissions.assert_not_called()
 
     def test_environment_override_and_home_default(self):
         with patch.dict(os.environ, {"SONIC_CACHE_DIR": str(self.root)}):

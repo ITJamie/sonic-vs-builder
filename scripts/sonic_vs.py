@@ -84,6 +84,30 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
+def permissions_image():
+    """Small local utility image; avoids granting the runner unrestricted sudo."""
+    dockerfile = Path(__file__).with_name("Dockerfile.tools")
+    tag = "sonic-vs-builder-tools:" + checksum(dockerfile)[:12]
+    present = subprocess.run(["docker", "image", "inspect", tag], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL).returncode == 0
+    if not present:
+        run("docker", "build", "--tag", tag, "--file", str(dockerfile), str(dockerfile.parent))
+    return tag
+
+
+def prepare_cache_permissions(paths):
+    # Upstream build hooks create some directories as root, then access them as
+    # the build user. Default ACLs preserve shared access for future children,
+    # even when the creating process uses umask 022.
+    image = permissions_image()
+    for path in paths:
+        run("docker", "run", "--rm", "--network", "none", "--user", "0:0",
+            "--mount", f"type=bind,source={path},target=/cache",
+            "--entrypoint", "/bin/sh", image, "-ec",
+            "chmod -R a+rwX /cache; "
+            "find /cache -type d -exec setfacl -m d:u::rwx,d:g::rwx,d:o::rwx {} +")
+
+
 def cache_settings(source, work, branch, mode="read-write", directory=None):
     """Use native dependency/version caches; never share raw target directories."""
     if mode not in ("read-write", "off"):
@@ -122,9 +146,12 @@ def cache_settings(source, work, branch, mode="read-write", directory=None):
     else:
         arguments.append("SONIC_VERSION_CACHE_METHOD=none")
         print("Upstream branch has no native download/version cache; package caching remains enabled", flush=True)
-    for location in (packages, downloads) if supports_downloads else (packages,):
+    paths = (packages, downloads) if supports_downloads else (packages,)
+    for location in paths:
         if shutil.disk_usage(location).free < 300 * 1024**3:
             raise ValueError(f"Need at least 300 GiB free on the cache filesystem containing {location}")
+    prepare_cache_permissions(paths)
+    for location in paths:
         # Check actual write access before starting a long source build.
         with tempfile.TemporaryFile(dir=location):
             pass
@@ -329,6 +356,18 @@ def cleanup(work):
         if not state["preexisting"]:
             # No --force: never remove another consumer's tags or containers.
             subprocess.run(["docker", "image", "rm", state["image_id"]], check=False)
+    source = work / "source"
+    if source.exists() and not source.is_symlink():
+        try:
+            shutil.rmtree(source)
+        except PermissionError:
+            # Docker-in-Docker leaves root-owned fsroot.docker.* files. The
+            # helper sees only this marked workspace, never the persistent cache.
+            image = permissions_image()
+            run("docker", "run", "--rm", "--network", "none", "--user", "0:0",
+                "--mount", f"type=bind,source={work},target=/workspace",
+                "--entrypoint", "/bin/sh", image, "-ec",
+                "test -f /workspace/.sonic-vs-builder && rm -rf -- /workspace/source")
     shutil.rmtree(work)
 
 

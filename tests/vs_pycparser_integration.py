@@ -94,7 +94,10 @@ assert importlib.metadata.version("cryptography") == "50.0.2"
 subprocess.run([sys.executable, "-m", "pip", "check"], check=True)
 print("Pinned pycparser, CFFI and cryptography install/import checks passed", flush=True)
 '''
-    packages = ["-c", "/probe/constraints", *wheels] if wheels else ["pycparser==3.0", "cffi==2.1.1", "cryptography==50.0.2"]
+    # The reduced fixture has PyGObject from apt; the real host-services wheel
+    # supplies its pycairo dependency, so include that here before pip check too.
+    packages = ["-c", "/probe/constraints", *wheels] if wheels else [
+        "pycparser==3.0", "cffi==2.1.1", "cryptography==50.0.2", "pycairo==1.26.1"]
     probe = "REMOVAL=" + repr(removal) + "\nPACKAGES=" + repr(packages) + "\n" + probe
     try:
         subprocess.run(["docker", "build", "-t", tag, str(work)], check=True)

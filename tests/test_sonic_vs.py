@@ -224,6 +224,104 @@ class WorkTests(unittest.TestCase):
         self.assertFalse((self.work / "metadata.json").exists())
 
 
+class RegistryPublishTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.work = Path(self.temp.name)
+        (self.work / builder.MARKER).touch()
+        self.image = "sha256:" + "c" * 64
+        self.ghcr = "ghcr.io/itjamie/sonic-vs-builder:202605"
+        self.hub = "docker.io/itjamie/docker-sonic-vs:202605"
+        builder.write_json(self.work / "validated.json", {"branch": "202605", "commit": COMMIT,
+                                                         "image_id": self.image, "platform": "vs"})
+        patches = [patch.object(builder, "branches", return_value=["202605"]),
+                   patch.dict(os.environ, {"GITHUB_ACTOR": "ITJamie", "GHCR_TOKEN": "gh-token",
+                                           "DOCKERHUB_USERNAME": "itjamie", "DOCKERHUB_TOKEN": "hub-token",
+                                           "GITHUB_STEP_SUMMARY": ""})]
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        command = patch.object(builder, "run")
+        self.command = command.start()
+        self.addCleanup(command.stop)
+        process = patch.object(builder.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, stdout=""))
+        self.process = process.start()
+        self.addCleanup(process.stop)
+        capture = patch.object(builder, "capture", side_effect=self.digests)
+        self.capture = capture.start()
+        self.addCleanup(capture.stop)
+
+    def digests(self, *args, **kwargs):
+        if args[-1] == self.hub:
+            # Docker omits the docker.io prefix in its local RepoDigests.
+            return json.dumps(["itjamie/docker-sonic-vs@sha256:" + "2" * 64])
+        return json.dumps(["ghcr.io/itjamie/sonic-vs-builder@sha256:" + "1" * 64])
+
+    def test_same_validated_image_pushed_to_both_registries(self):
+        builder.publish(self.work, "ITJamie/sonic-vs-builder", dockerhub=True)
+        calls = [call.args for call in self.command.call_args_list]
+        for destination in (self.ghcr, self.hub):
+            self.assertIn(("docker", "tag", self.image, destination), calls)
+            self.assertIn(("docker", "push", destination), calls)
+        self.assertEqual([call[:3] for call in calls[:2]], [("docker", "login", "ghcr.io"),
+                                                          ("docker", "login", "docker.io")])
+        metadata = json.loads((self.work / "metadata.json").read_text())
+        self.assertEqual(metadata["registries"]["dockerhub"]["digest"], "sha256:" + "2" * 64)
+        self.assertEqual(metadata["registries"]["dockerhub"]["image"], self.hub)
+        self.assertEqual(metadata["registries"]["ghcr"]["digest"], metadata["digest"])
+        self.assertEqual(metadata["image"], self.ghcr)
+        self.assertNotIn("hub-token", json.dumps(metadata))
+        self.assertFalse(Path(self.command.call_args_list[0].kwargs["env"]["DOCKER_CONFIG"]).exists())
+
+    def test_ghcr_only_does_not_use_hub_even_when_secrets_exist(self):
+        builder.publish(self.work, "ITJamie/sonic-vs-builder")
+        calls = [call.args for call in self.command.call_args_list]
+        self.assertNotIn(("docker", "push", self.hub), calls)
+        self.assertFalse(any(call[:3] == ("docker", "login", "docker.io") for call in calls))
+        self.assertEqual(set(json.loads((self.work / "metadata.json").read_text())["registries"]), {"ghcr"})
+
+    def test_missing_hub_secret_fails_before_any_registry_changes(self):
+        with patch.dict(os.environ, {"DOCKERHUB_TOKEN": ""}):
+            with self.assertRaisesRegex(ValueError, "Missing dockerhub"):
+                builder.publish(self.work, "ITJamie/sonic-vs-builder", dockerhub=True)
+        self.command.assert_not_called()
+        self.process.assert_not_called()
+
+    def test_hub_login_failure_prevents_all_pushes_and_removes_credentials(self):
+        def command(*args, **kwargs):
+            if args[:3] == ("docker", "login", "docker.io"):
+                raise subprocess.CalledProcessError(1, "docker login")
+        self.command.side_effect = command
+        with self.assertRaises(subprocess.CalledProcessError):
+            builder.publish(self.work, "ITJamie/sonic-vs-builder", dockerhub=True)
+        self.assertFalse(any(call.args[:2] == ("docker", "push") for call in self.command.call_args_list))
+        self.assertFalse(Path(self.command.call_args_list[0].kwargs["env"]["DOCKER_CONFIG"]).exists())
+        self.assertFalse((self.work / "metadata.json").exists())
+
+    def test_hub_push_failure_keeps_ghcr_metadata_and_tracks_both_local_tags(self):
+        def command(*args, **kwargs):
+            if args == ("docker", "push", self.hub):
+                raise subprocess.CalledProcessError(1, "docker push")
+        self.command.side_effect = command
+        with self.assertRaises(subprocess.CalledProcessError):
+            builder.publish(self.work, "ITJamie/sonic-vs-builder", dockerhub=True)
+        metadata = json.loads((self.work / "metadata.json").read_text())
+        self.assertEqual(set(metadata["registries"]), {"ghcr"})
+        tags = json.loads((self.work / "tag-state.json").read_text())["tags"]
+        self.assertEqual([tag["reference"] for tag in tags], [self.ghcr, self.hub])
+        self.assertFalse(Path(self.command.call_args_list[0].kwargs["env"]["DOCKER_CONFIG"]).exists())
+
+    def test_cleanup_restores_existing_tag_and_removes_new_hub_tag(self):
+        builder.write_json(self.work / "tag-state.json", {"tags": [
+            {"reference": self.ghcr, "previous": "sha256:previous"},
+            {"reference": self.hub, "previous": None},
+        ]})
+        builder.cleanup(self.work)
+        self.command.assert_called_once_with("docker", "tag", "sha256:previous", self.ghcr)
+        self.process.assert_called_once_with(["docker", "image", "rm", self.hub], check=False)
+
+
 class CacheTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

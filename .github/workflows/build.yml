@@ -30,6 +30,11 @@ on:
         options:
           - read-write
           - off
+      publish_dockerhub:
+        description: Also push the validated VS image to itjamie/docker-sonic-vs
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -44,6 +49,16 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
+      - name: Check Docker Hub secret configuration
+        if: ${{ inputs.publish_dockerhub && inputs.images != 'broadcom' }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -z "$DOCKERHUB_USERNAME" || -z "$DOCKERHUB_TOKEN" ]]; then
+            echo '::error::Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN, or disable publish_dockerhub.'
+            exit 1
+          fi
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -91,14 +106,17 @@ jobs:
         run: |
           set -o pipefail
           python3 -u scripts/sonic_vs.py build --platform vs --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" 2>&1 | tee "$WORK/build.log"
-      - name: Publish validated VS image to GHCR
+      - name: Publish validated VS image to selected registries
         if: ${{ contains(matrix.images, 'vs') }}
         env:
           WORK: ${{ steps.vs_work.outputs.path }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          PUBLISH_DOCKERHUB: ${{ inputs.publish_dockerhub }}
         run: |
           set -o pipefail
-          python3 -u scripts/sonic_vs.py publish --work "$WORK" --repository "$REPOSITORY" 2>&1 | tee "$WORK/publish.log"
+          python3 -u scripts/sonic_vs.py publish --work "$WORK" --repository "$REPOSITORY" --dockerhub "$PUBLISH_DOCKERHUB" 2>&1 | tee "$WORK/publish.log"
       - name: Stage VS downloads in draft release
         if: ${{ contains(matrix.images, 'vs') }}
         env:

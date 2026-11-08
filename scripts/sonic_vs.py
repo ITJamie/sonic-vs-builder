@@ -251,7 +251,7 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
     write_json(work / "validated.json", metadata)
 
 
-def publish(work, repository):
+def publish(work, repository, dockerhub=False):
     work = owned_work(work)
     repository = repository.lower()
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9_.-]*", repository):
@@ -262,24 +262,50 @@ def publish(work, repository):
         raise ValueError("Invalid branch tag")
     image = metadata["image_id"]
     reference = f"ghcr.io/{repository}:{branch}"
+    destinations = [("ghcr", "ghcr.io", os.environ.get("GITHUB_ACTOR"),
+                     os.environ.get("GHCR_TOKEN"), reference)]
+    if dockerhub:
+        destinations.append(("dockerhub", "docker.io", os.environ.get("DOCKERHUB_USERNAME"),
+                             os.environ.get("DOCKERHUB_TOKEN"), f"docker.io/itjamie/docker-sonic-vs:{branch}"))
+    for name, _registry, username, token, _reference in destinations:
+        if not username or not token:
+            raise ValueError(f"Missing {name} publishing credentials")
+    metadata["registries"] = {}
     # Workflow GITHUB_TOKEN publication links the package to its repository.
     with tempfile.TemporaryDirectory(prefix="sonic-vs-auth-") as config:
         env = dict(os.environ, DOCKER_CONFIG=config)
-        run("docker", "login", "ghcr.io", "--username", os.environ["GITHUB_ACTOR"],
-            "--password-stdin", input=os.environ["GHCR_TOKEN"] + "\n", env=env)
-        previous = subprocess.run(["docker", "image", "inspect", "--format", "{{.Id}}", reference],
-                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        # Record the previous local tag before changing it, including when push fails.
-        write_json(work / "tag-state.json", {"reference": reference,
-                                            "previous": previous.stdout.strip() if previous.returncode == 0 else None})
-        run("docker", "tag", image, reference, env=env)
-        run("docker", "push", reference, env=env)
-        digests = json.loads(capture("docker", "image", "inspect", "--format", "{{json .RepoDigests}}",
-                                     reference, env=env))
-        digest = next(item.split("@", 1)[1] for item in digests if item.startswith(f"ghcr.io/{repository}@"))
-        metadata.update({"image": reference, "digest": digest, "pull_command": f"docker pull {reference}",
-                         "repository": f"https://github.com/{repository}"})
-        write_json(work / "metadata.json", metadata)
+        # Authenticate all selected destinations before changing either registry.
+        for _name, registry, username, token, _reference in destinations:
+            run("docker", "login", registry, "--username", username,
+                "--password-stdin", input=token + "\n", env=env)
+        tags = []
+        for name, _registry, _username, _token, destination in destinations:
+            previous = subprocess.run(["docker", "image", "inspect", "--format", "{{.Id}}", destination],
+                                      text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            # Track both tags even if a later push fails; restore preexisting tags.
+            tags.append({"reference": destination,
+                         "previous": previous.stdout.strip() if previous.returncode == 0 else None})
+            write_json(work / "tag-state.json", {"tags": tags})
+            run("docker", "tag", image, destination, env=env)
+            run("docker", "push", destination, env=env)
+            digests = json.loads(capture("docker", "image", "inspect", "--format", "{{json .RepoDigests}}",
+                                        destination, env=env)) or []
+            image_name = destination.rsplit(":", 1)[0]
+            # Docker commonly omits docker.io/ in RepoDigests for Hub images.
+            normalize = lambda value: value.removeprefix("docker.io/").removeprefix("index.docker.io/")
+            digest = next((item.split("@", 1)[1] for item in digests
+                           if "@" in item and normalize(item.split("@", 1)[0]) == normalize(image_name)), None)
+            if not digest or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                raise ValueError(f"Cannot determine pushed digest for {destination}")
+            details = {"image": destination, "digest": digest, "pull_command": f"docker pull {destination}"}
+            metadata["registries"][name] = details
+            if name == "ghcr":
+                # Preserve existing consumers of the top-level GHCR fields.
+                metadata.update(details)
+                metadata["repository"] = f"https://github.com/{repository}"
+            # Keep successful destination metadata if the subsequent push fails.
+            write_json(work / "metadata.json", metadata)
+            print(f"Published {destination}@{digest}", flush=True)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as stream:
@@ -290,11 +316,13 @@ def cleanup(work):
     work = owned_work(work)
     tag_file = work / "tag-state.json"
     if tag_file.exists():
-        tag = json.loads(tag_file.read_text())
-        if tag["previous"]:
-            run("docker", "tag", tag["previous"], tag["reference"])
-        else:
-            subprocess.run(["docker", "image", "rm", tag["reference"]], check=False)
+        state = json.loads(tag_file.read_text())
+        # Also support recovering workspaces created by the GHCR-only publisher.
+        for tag in state.get("tags", [state]):
+            if tag["previous"]:
+                run("docker", "tag", tag["previous"], tag["reference"])
+            else:
+                subprocess.run(["docker", "image", "rm", tag["reference"]], check=False)
     state_file = work / "image-state.json"
     if state_file.exists():
         state = json.loads(state_file.read_text())
@@ -324,6 +352,7 @@ def main():
             command.add_argument("--cache-dir", help="Persistent cache root (or SONIC_CACHE_DIR; defaults to ~/.cache/sonic-vs-builder)")
         if name == "publish":
             command.add_argument("--repository", required=True)
+            command.add_argument("--dockerhub", choices=("true", "false"), default="false")
     args = parser.parse_args()
     if args.command == "prepare":
         print(json.dumps(prepare(args.branches, args.build_jobs, args.images), separators=(",", ":")))
@@ -334,7 +363,7 @@ def main():
     elif args.command == "build":
         build(args.work, args.branch, args.commit, args.build_jobs, args.platform, args.cache_mode, args.cache_dir)
     elif args.command == "publish":
-        publish(args.work, args.repository)
+        publish(args.work, args.repository, args.dockerhub == "true")
     else:
         cleanup(args.work)
 

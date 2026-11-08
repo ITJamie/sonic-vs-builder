@@ -8,6 +8,8 @@ docker pull ghcr.io/itjamie/sonic-vs-builder:202605
 
 Images are Linux amd64, built from `sonic-net/sonic-buildimage` without patches. The VS container tag is exactly the upstream branch name. Rebuilding a branch updates its container tag; use the digest from the workflow summary when you need an immutable reference. There is no additional `latest` alias. Downloadable releases retain every successful build separately.
 
+With Docker Hub publishing enabled (the workflow default), the same VS image is also available as `itjamie/docker-sonic-vs:<branch>`.
+
 ## Set up a runner
 
 Follow [the Ubuntu runner guide](docs/runner.md). Builds require a dedicated self-hosted runner labeled `sonic-vs`; ordinary GitHub-hosted runners only validate this builder's code. The default is tuned to our dedicated six-core, 48 GB RAM runner: three build jobs, with VS and Broadcom built sequentially. Hosts with 16 GB RAM should select one build job. Keep at least 300 GiB free on both the workspace and Docker filesystems. If those paths share a filesystem, the checks refer to the same storage, not two separate 300 GiB allocations.
@@ -17,6 +19,8 @@ Follow [the Ubuntu runner guide](docs/runner.md). Builds require a dedicated sel
 Open **Actions → Build SONiC images → Run workflow** on `main`. Enter a branch, such as `202605`, or a comma-separated list, such as `202605,202511`. Choose `images=both` (default), `vs`, or `broadcom`. `build_jobs` controls upstream compilation parallelism per platform and defaults to `3`.
 
 `cache_mode=read-write` is enabled by default. Select `off` to bypass the persistent caches for a diagnostic build; this does not erase them.
+
+`publish_dockerhub=true` is enabled by default for VS builds. Set it to `false` for GHCR-only publication. Broadcom-only builds do not log in to or publish to either container registry.
 
 Using the GitHub CLI:
 
@@ -59,7 +63,7 @@ For the default `both` selection, a complete release contains:
 | --- | --- |
 | `docker-sonic-vs.gz` | Docker image archive; load with `docker load -i docker-sonic-vs.gz`. |
 | `sonic-broadcom.bin` | Broadcom ONIE installer. |
-| `vs-metadata.json`, `broadcom-metadata.json` | Upstream commit, platform, output SHA-256 and size; VS metadata also records its GHCR digest. |
+| `vs-metadata.json`, `broadcom-metadata.json` | Upstream commit, platform, output SHA-256 and size; VS metadata also records each selected registry's image reference and digest. |
 | `vs-SHA256SUMS`, `broadcom-SHA256SUMS` | Checksums of the complete downloadable files. |
 | `vs-README.txt`, `broadcom-README.txt` | Download, reassembly, verification and usage instructions. |
 
@@ -70,7 +74,7 @@ cat sonic-broadcom.bin.part* > sonic-broadcom.bin
 sha256sum -c broadcom-SHA256SUMS
 ```
 
-Releases stay draft until all selected images and their metadata are uploaded. If a build or upload fails, the partial draft is retained for inspection by repository writers; it is not published as a complete release. Rerunning failed jobs uses a new attempt number and a separate release. A VS image already pushed to GHCR remains available even if the subsequent Broadcom build fails. A `broadcom`-only run does not touch GHCR.
+Releases stay draft until all selected images and their metadata are uploaded. If a build or upload fails, the partial draft is retained for inspection by repository writers; it is not published as a complete release. Rerunning failed jobs uses a new attempt number and a separate release. A VS image already pushed to a registry remains available even if a later registry push or Broadcom build fails. A `broadcom`-only run does not touch container registries.
 
 ## First publication and public pulls
 
@@ -91,7 +95,7 @@ Both commands must succeed without logging in. The digest pull verifies the exac
 
 ## Build results and failures
 
-The Actions job summary links to the published release. VS metadata contains the upstream branch, commit SHA, image ID, registry digest and pull command; Broadcom metadata records its output checksum and size. Each platform uploads build and publication logs, including on failure, as Actions artifacts with 14-day retention. The images are retained as release downloads; the VS image is also available through GHCR. Large binaries are not duplicated in Actions artifacts.
+The Actions job summary links to the published release. VS metadata contains the upstream branch, commit SHA, image ID and a `registries` map with each published image's reference, digest and pull command; the top-level image/digest fields continue to identify GHCR. Broadcom metadata records its output checksum and size. Each platform uploads build and publication logs, including on failure, as Actions artifacts with 14-day retention. The images are retained as release downloads; the VS image is also available through the selected registries. Large binaries are not duplicated in Actions artifacts.
 
 A failed build or smoke check skips publication, leaving the existing registry tag untouched. A successful push followed by a metadata or cleanup failure can still have updated the registry tag; inspect the publication log in that case. If a job waits indefinitely, check the runner is online with all four labels: `self-hosted`, `linux`, `x64`, `sonic-vs`.
 
@@ -108,8 +112,27 @@ actionlint
 python3 scripts/sonic_vs.py prepare --branches 202605,202511 --build-jobs 3 --images both
 ```
 
-The first three commands are also run in CI. `actionlint` checks workflow expressions and uses ShellCheck for embedded shell when available; the Ubuntu CI runner provides ShellCheck. The final command queries upstream and prints the resolved build matrix. Build, GHCR publication and release publication are separate commands; `python3 scripts/sonic_vs.py --help` and `python3 scripts/releases.py --help` list them. The workflow uses `GITHUB_TOKEN` with `contents: write` for releases and `packages: write` for GHCR; no additional secrets are needed.
+The first three commands are also run in CI. `actionlint` checks workflow expressions and uses ShellCheck for embedded shell when available; the Ubuntu CI runner provides ShellCheck. The final command queries upstream and prints the resolved build matrix. Build, container publication and release publication are separate commands; `python3 scripts/sonic_vs.py --help` and `python3 scripts/releases.py --help` list them. The workflow uses `GITHUB_TOKEN` with `contents: write` for releases and `packages: write` for GHCR; Docker Hub requires the two secrets below. The standalone `publish` command defaults to GHCR-only; pass `--dockerhub true` to enable both.
 
-## Future Docker Hub publication
+## Docker Hub publication
 
-The intended Docker Hub destination is `itjamie/docker-sonic-vs:<upstream-branch>`. Publication is separate from compilation so a future publisher can tag and push the same validated image to both registries without rebuilding. That addition will need a Docker Hub access token with write access and the username `itjamie`, stored as Actions secrets. This version does not request Docker Hub credentials or push there.
+Configure repository Actions secrets `DOCKERHUB_USERNAME` (`itjamie`) and `DOCKERHUB_TOKEN` (a Docker Hub access token with write access to `itjamie/docker-sonic-vs`). Do not use your Docker Hub account password. Missing secrets fail preparation before a long source build when Docker Hub publication is selected. The publisher authenticates to both registries before pushing anything, and uses a temporary Docker credential directory that is removed on normal success or errors.
+
+The same smoke-tested image ID is tagged and pushed to:
+
+```text
+ghcr.io/itjamie/sonic-vs-builder:<upstream-branch>
+docker.io/itjamie/docker-sonic-vs:<upstream-branch>
+```
+
+There is no second image build and no `latest` alias. Each successful rebuild updates the selected branch tags. Metadata records each registry digest separately. Both local publication tags are cleaned up, restoring any tags that existed before the job.
+
+Publishing to two registries is not atomic: if GHCR succeeds and Docker Hub subsequently fails, GHCR's tag is updated and the job fails. The successful GHCR publication is retained in the Actions metadata artifact; release publication and the subsequent Broadcom build are skipped. Fix the credentials or registry error and start/rerun a build, or select `publish_dockerhub=false` for GHCR-only publication.
+
+After the first successful Docker Hub publication, verify a pull on a machine without Docker Hub credentials:
+
+```console
+docker pull itjamie/docker-sonic-vs:202605
+```
+
+The Broadcom installer is distributed through GitHub Releases, not Docker Hub.

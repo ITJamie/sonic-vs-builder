@@ -503,13 +503,18 @@ def load_untagged(archive):
         output.close()
 
 
-def smoke(image):
+def smoke(image, require_rsync=True):
     actual = capture("docker", "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image)
     if actual != "linux/amd64":
         raise ValueError(f"Unexpected image platform: {actual}")
+    checks = ["test -s /etc/sonic/sonic_version.yml", "cat /etc/sonic/sonic_version.yml",
+              "/usr/local/bin/supervisord --version"]
+    if require_rsync:
+        checks.append("rsync --version")
+    checks.append("sonic-cfggen --help")
     run("docker", "run", "--rm", "--network", "none", "--entrypoint", "/bin/sh", image,
-        "-ec", "test -s /etc/sonic/sonic_version.yml; cat /etc/sonic/sonic_version.yml; "
-        "/usr/local/bin/supervisord --version; rsync --version; sonic-cfggen --help")
+        "-ec", "; ".join(checks))
+    return ["linux/amd64", *checks]
 
 
 def validate_kvm(archive):
@@ -565,7 +570,10 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
         image = load_untagged(archive)
         # Persist the actual loaded identity before smoke testing can fail.
         write_json(work / "image-state.json", {"image_id": image, "preexisting": image in previous_images})
-        smoke(image)
+        # Legacy layouts intentionally purge rsync from runtime images. The
+        # extra rsync check verifies our assembly compatibility fix when used;
+        # it is not a universal SONiC runtime dependency.
+        metadata["smoke_checks"] = smoke(image, require_rsync="cached-rsync-cleanup" in compatibility)
         metadata["image_id"] = image
         metadata["archive_image_config_digest"] = config_digest
     elif platform == "kvm":

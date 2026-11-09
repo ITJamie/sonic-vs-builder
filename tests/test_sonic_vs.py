@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tarfile
 import tempfile
@@ -161,6 +162,36 @@ class WorkTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             builder.smoke("sha256:example")
         run.assert_not_called()
+
+    @patch.object(builder, "capture", return_value="linux/amd64")
+    def test_legacy_smoke_without_rsync_still_executes_required_tools(self, _capture):
+        version = self.work / "version.yml"
+        version.write_text("sonic_os_version: 12\n")
+        supervisor = self.work / "supervisord"
+        supervisor.write_text("#!/bin/sh\nprintf '4.2.5\\n'\n")
+        supervisor.chmod(0o755)
+        cfggen = self.work / "sonic-cfggen"
+        cfggen.write_text('#!/bin/sh\ntest "$1" = --help\n')
+        cfggen.chmod(0o755)
+
+        def execute_shell(*command):
+            shell = command[-1].replace("/etc/sonic/sonic_version.yml", shlex.quote(str(version)))
+            shell = shell.replace("/usr/local/bin/supervisord", shlex.quote(str(supervisor)))
+            shell = shell.replace("sonic-cfggen", shlex.quote(str(cfggen)))
+            shell = shell.replace("rsync --version", "sonic-vs-test-missing-rsync --version")
+            subprocess.run(["/bin/sh", "-ec", shell], check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        with patch.object(builder, "run", side_effect=execute_shell):
+            checks = builder.smoke("sha256:legacy", require_rsync=False)
+            self.assertIn("sonic-cfggen --help", checks)
+            with self.assertRaises(subprocess.CalledProcessError) as missing:
+                builder.smoke("sha256:modern", require_rsync=True)
+            self.assertEqual(missing.exception.returncode, 127)
+            cfggen.write_text("#!/bin/sh\nexit 23\n")
+            with self.assertRaises(subprocess.CalledProcessError) as broken:
+                builder.smoke("sha256:legacy", require_rsync=False)
+            self.assertEqual(broken.exception.returncode, 23)
 
     @patch.object(builder, "preflight")
     @patch.object(builder, "run")

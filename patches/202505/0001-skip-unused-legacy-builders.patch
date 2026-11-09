@@ -1,0 +1,33 @@
+Subject: [202505] Skip unused Buster and Bullseye build environments
+
+The selected docker-sonic-vs.gz, sonic-vs.img.gz and sonic-broadcom.bin
+targets do not require Buster or Bullseye runtime layers. The VS PTF images
+use Buster; optional SDK and management test images use Bullseye. These are
+separate targets, not part of the three selected outputs.
+Upstream configure nevertheless initializes every enabled build environment;
+its legacy defaults fail on missing security repositories/package archives.
+
+Use upstream NOBUSTER/NOBULLSEYE switches instead of changing mirrors or
+removing image dependencies. Keep Bookworm enabled. Explicit NOBUSTER=0
+or NOBULLSEYE=0 still permits callers to request a legacy environment.
+
+Failures: https://github.com/ITJamie/sonic-vs-builder/actions/runs/42684597504
+          https://github.com/ITJamie/sonic-vs-builder/actions/runs/42688066704
+Upstream source: https://github.com/sonic-net/sonic-buildimage/blob/ff3c0c9f686a1d0dbddbe813b233b3b7a51bd8e2/Makefile
+Verified against ff3c0c9f686a1d0dbddbe813b233b3b7a51bd8e2.
+Remove once upstream defaults both switches to 1. Reassess if selected
+image dependencies require a legacy environment; this does not port the
+optional PTF, SDK or management test images.
+
+--- a/Makefile
++++ b/Makefile
+@@ -2,7 +2,7 @@
+ 
+ NOJESSIE ?= 1
+ NOSTRETCH ?= 1
+-NOBUSTER ?= 0
+-NOBULLSEYE ?= 0
++NOBUSTER ?= 1
++NOBULLSEYE ?= 1
+ NOBOOKWORM ?= 0
+ 

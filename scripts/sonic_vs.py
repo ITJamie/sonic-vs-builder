@@ -41,6 +41,11 @@ def runner_lock(root, blocking=True):
     """Coordinate builder commands with scheduled maintenance on this host."""
     root.mkdir(parents=True, exist_ok=True)
     with (root / "maintenance.lock").open("a+") as stream:
+        if os.geteuid() == 0:
+            # A manual root maintenance run must not leave the runner unable to
+            # open the shared lock later. Use the existing cache directory owner.
+            owner = root.stat()
+            os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
         fcntl.flock(stream, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         try:
             yield

@@ -118,6 +118,15 @@ class Maintenance(unittest.TestCase):
             with runner_lock(root, blocking=False):
                 pass
 
+    @patch("sonic_vs.os.geteuid", return_value=0)
+    @patch("sonic_vs.os.fchown")
+    def test_root_maintenance_keeps_lock_owned_by_cache_account(self, chown, _root):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            owner = root.stat()
+            with runner_lock(root):
+                self.assertEqual(chown.call_args.args[1:], (owner.st_uid, owner.st_gid))
+
     def test_local_custom_cache_root_is_reused_for_publish_and_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)

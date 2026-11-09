@@ -1,0 +1,4 @@
+# SONiC Bash documentation in privileged build containers.
+# Keep the gs profile enforced and permit only its generated PS/PDF files.
+owner /sonic/src/bash/bash-*/build-bash/doc/bash.ps r,
+owner /sonic/src/bash/bash-*/build-bash/doc/bash.pdf rw,

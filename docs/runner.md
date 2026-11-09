@@ -37,6 +37,29 @@ free -h
 
 Use a local Docker Engine, not a remote context or Docker Desktop. Both the runner and Docker must use Linux amd64. The builder does not install or upgrade system dependencies during a build. See [upstream build requirements](https://github.com/sonic-net/sonic-buildimage/blob/202605/README.md) for details.
 
+## Ghostscript confinement on newer Ubuntu hosts
+
+Ubuntu hosts that load `/etc/apparmor.d/gs` can apply that profile to Ghostscript
+inside the privileged build container too. A KVM build can then fail while
+packaging Bash with `Could not open the file bash.pdf`, despite successful groff
+output. Confirm the cause using the kernel journal: the relevant denial names
+`profile="gs"` and `/sonic/src/bash/bash-*/build-bash/doc/bash.pdf`.
+
+On an affected dedicated runner, add the supplied narrow local rules and reload
+only the Ghostscript profile while no build is active:
+
+```sh
+sudo install -d /etc/apparmor.d/local
+sudo tee -a /etc/apparmor.d/local/gs < deploy/apparmor-gs-sonic-bash.rules
+sudo apparmor_parser -r /etc/apparmor.d/gs
+```
+
+Apply the snippet once, preserving any existing local rules. It permits the
+owning user to read the generated Bash PostScript and write its PDF; it keeps
+the profile enforced and grants no access to other build paths. Hosts without
+the `gs` profile need no adjustment. The workflow does not change host AppArmor
+policy automatically. This host setting is not included in published images.
+
 ## Register the runner
 
 In `ITJamie/sonic-vs-builder`, open **Settings → Actions → Runners → New self-hosted runner**, select Linux x64, and follow GitHub's generated download and registration commands. Add the custom label `sonic-vs`; keep the default `self-hosted`, `linux` and `x64` labels. Install and start its service using the generated runner's `svc.sh` instructions. Verify that the service account can execute every prerequisite check above, including `j2`.

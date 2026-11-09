@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import releases
-from sonic_vs import MARKER, checksum, write_json
+from sonic_vs import MARKER, checksum, cleanup, runner_lock, write_json
 
 REPO = "ITJamie/sonic-vs-builder"
 DRAFT = {"id": 42, "tag_name": "sonic-202605-123-1", "draft": True,
@@ -35,6 +35,87 @@ class ReleaseTests(unittest.TestCase):
     def test_finds_draft_through_release_listing(self, api):
         self.assertEqual(releases.release(REPO, DRAFT["tag_name"]), DRAFT)
         api.assert_called_once_with(REPO, "/releases?per_page=100&page=1")
+
+    @patch.object(releases, "api")
+    def test_anchor_pins_before_build_and_accepts_same_tag_after_main_moves(self, api):
+        api.side_effect = [releases.GitHubAPIError("GET", "/git/ref/tags/build", 404, "Not Found"), {}]
+        releases.anchor(REPO, "build", "b" * 40)
+        api.assert_called_with(REPO, "/git/refs", "POST", {"ref": "refs/tags/build", "sha": "b" * 40})
+        api.reset_mock()
+        api.side_effect = None
+        api.return_value = {"object": {"type": "commit", "sha": "b" * 40, "url": "commit-url"}}
+        releases.anchor(REPO, "build", "b" * 40)
+        api.assert_called_once_with(REPO, "/git/ref/tags/build")
+
+    @patch.object(releases, "api")
+    def test_anchor_never_moves_existing_tag_or_substitutes_head(self, api):
+        api.return_value = {"object": {"type": "commit", "sha": "c" * 40}}
+        with self.assertRaisesRegex(ValueError, "does not point"):
+            releases.anchor(REPO, "build", "b" * 40)
+        self.assertEqual(api.call_count, 1)
+        api.reset_mock()
+        api.side_effect = releases.GitHubAPIError("GET", "/git/ref", 403, "Forbidden")
+        with self.assertRaises(releases.GitHubAPIError):
+            releases.anchor(REPO, "build", "b" * 40)
+        self.assertEqual(api.call_count, 1)
+
+    @patch.object(releases.urllib.request, "urlopen")
+    def test_api_error_reports_endpoint_and_message_without_token(self, urlopen):
+        urlopen.side_effect = releases.urllib.error.HTTPError(
+            "https://api.github.com/repos/test/repo/releases", 403, "Forbidden", {},
+            io.BytesIO(b'{"message":"Resource not accessible by integration secret-token"}'))
+        with patch.dict(os.environ, {"GH_TOKEN": "secret-token"}):
+            with self.assertRaises(releases.GitHubAPIError) as error:
+                releases.api(REPO, "/releases", "POST", {})
+        self.assertEqual(error.exception.status, 403)
+        self.assertIn("POST /repos/ITJamie/sonic-vs-builder/releases: HTTP 403", str(error.exception))
+        self.assertIn("Resource not accessible by integration", str(error.exception))
+        self.assertNotIn("secret-token", str(error.exception))
+
+    @patch.object(releases, "release", return_value=DRAFT)
+    @patch.object(releases, "upload")
+    def test_failed_upload_preserves_output_for_retry_after_source_cleanup(self, upload, _release):
+        payload = self.source.read_bytes()
+        upload.side_effect = releases.GitHubAPIError("POST", "/assets", 403, "Forbidden")
+        with self.assertRaises(releases.GitHubAPIError):
+            releases.stage(self.work, REPO, DRAFT["tag_name"], "b" * 40)
+        cleanup(self.work)
+        retained = self.work / "retained-output/sonic-broadcom.bin"
+        self.assertEqual(retained.read_bytes(), payload)
+        self.assertFalse((self.work / "source").exists())
+        self.assertTrue((self.work / MARKER).exists())
+        cleanup(self.work)  # Retention remains safe on a repeated cleanup.
+        upload.side_effect = None
+        releases.stage(self.work, REPO, DRAFT["tag_name"], "b" * 40)
+        self.assertEqual(upload.call_args_list[-4].args[2], retained.resolve())
+        cleanup(self.work)
+        self.assertFalse(self.work.exists())
+
+    def test_explicit_discard_removes_retained_output(self):
+        cleanup(self.work)
+        self.assertTrue((self.work / "retained-output/sonic-broadcom.bin").exists())
+        cleanup(self.work, discard_output=True)
+        self.assertFalse(self.work.exists())
+
+    def test_cleanup_does_not_delete_changed_validated_output(self):
+        self.source.write_bytes(b"changed after validation")
+        with self.assertRaisesRegex(ValueError, "changed validated output"):
+            cleanup(self.work)
+        self.assertTrue(self.source.exists())
+
+    @patch.object(releases, "stage")
+    def test_manual_recovery_cli_excludes_scheduled_maintenance(self, stage):
+        root = self.work / "cache"
+        def recovery(*args):
+            with self.assertRaises(BlockingIOError):
+                with runner_lock(root, blocking=False):
+                    self.fail("Maintenance entered during recovery upload")
+        stage.side_effect = recovery
+        arguments = ["releases.py", "stage", "--repository", REPO, "--tag", "build",
+                     "--target", "b" * 40, "--work", str(self.work)]
+        with patch.dict(os.environ, {"SONIC_CACHE_DIR": str(root)}), patch.object(sys, "argv", arguments):
+            releases.main()
+        stage.assert_called_once()
 
     @patch.object(releases, "release", return_value=DRAFT)
     @patch.object(releases, "upload")

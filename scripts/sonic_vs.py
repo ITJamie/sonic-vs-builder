@@ -641,8 +641,22 @@ def publish(work, repository, dockerhub=False):
             stream.write(f"### {branch}\n\n```json\n{json.dumps(metadata, indent=2)}\n```\n")
 
 
-def cleanup(work):
+def cleanup(work, discard_output=False):
     work = owned_work(work)
+    retained = None
+    if not discard_output and (work / "validated.json").is_file() and not (work / "release.json").is_file():
+        metadata = json.loads((work / "validated.json").read_text())
+        filename = TARGETS[metadata["platform"]]
+        archive = work / "source/target" / filename
+        destination = work / "retained-output" / filename
+        candidate = archive if archive.is_file() else destination
+        if candidate.is_file():
+            if candidate.is_symlink() or checksum(candidate) != metadata["sha256"]:
+                raise ValueError("Refusing to discard a changed validated output during cleanup")
+            destination.parent.mkdir(exist_ok=True)
+            if candidate != destination:
+                candidate.replace(destination)
+            retained = destination
     tag_file = work / "tag-state.json"
     if tag_file.exists():
         state = json.loads(tag_file.read_text())
@@ -658,6 +672,8 @@ def cleanup(work):
         if not state["preexisting"]:
             # No --force: never remove another consumer's tags or containers.
             subprocess.run(["docker", "image", "rm", state["image_id"]], check=False)
+    for state in (tag_file, state_file):
+        state.unlink(missing_ok=True)
     source = work / "source"
     if source.exists() and not source.is_symlink():
         try:
@@ -670,7 +686,14 @@ def cleanup(work):
                 "--mount", f"type=bind,source={work},target=/workspace",
                 "--entrypoint", "/bin/sh", image, "-ec",
                 "test -f /workspace/.sonic-vs-builder && rm -rf -- /workspace/source")
-    shutil.rmtree(work)
+    if retained is None:
+        shutil.rmtree(work)
+    else:
+        print(f"Validated output retained after incomplete publication: {retained}", flush=True)
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+                stream.write(f"\nPublication failed: validated output retained at `{retained}`. "
+                             "Scheduled maintenance may remove this marked workspace after two days.\n")
 
 
 def main():
@@ -695,6 +718,9 @@ def main():
         if name == "publish":
             command.add_argument("--repository", required=True)
             command.add_argument("--dockerhub", choices=("true", "false"), default="false")
+        if name == "cleanup":
+            command.add_argument("--discard-output", action="store_true",
+                                 help="Also discard a validated output retained after failed publication")
     args = parser.parse_args()
     if args.command == "prepare":
         dispatch(args)
@@ -720,7 +746,7 @@ def dispatch(args):
     elif args.command == "publish":
         publish(args.work, args.repository, args.dockerhub == "true")
     else:
-        cleanup(args.work)
+        cleanup(args.work, getattr(args, "discard_output", False))
 
 
 if __name__ == "__main__":

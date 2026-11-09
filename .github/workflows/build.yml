@@ -53,6 +53,8 @@ concurrency:
 jobs:
   prepare:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
@@ -77,6 +79,24 @@ jobs:
         run: |
           matrix=$(python3 scripts/sonic_vs.py prepare --branches "$BRANCHES" --build-jobs "$BUILD_JOBS" --images "$IMAGES")
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+      - name: Anchor release tags and verify draft publication before long builds
+        env:
+          MATRIX: ${{ steps.matrix.outputs.matrix }}
+          REPOSITORY: ${{ github.repository }}
+          BUILDER_COMMIT: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, "scripts")
+          from releases import anchor, draft_release
+          from sonic_vs import UPSTREAM
+          for entry in json.loads(os.environ["MATRIX"])["include"]:
+              tag = f"sonic-{entry['branch']}-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+              anchor(os.environ["REPOSITORY"], tag, os.environ["BUILDER_COMMIT"])
+              draft_release(os.environ["REPOSITORY"], tag, os.environ["BUILDER_COMMIT"],
+                            {"branch": entry["branch"], "commit": entry["commit"], "upstream": UPSTREAM})
+          PY
 
   build:
     needs: prepare

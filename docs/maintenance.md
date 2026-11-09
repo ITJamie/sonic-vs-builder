@@ -6,6 +6,12 @@ maintenance handles obsolete build images, bounded Docker build cache, and work
 directories left by a crashed runner or interrupted cleanup. Failed compilations
 may still produce useful native package archives; keep those for the next retry.
 
+If validation succeeds but publication does not finish, normal cleanup moves the
+verified archive into `retained-output/` in the marked workspace and removes the
+large source tree. It keeps metadata/logs so the archive can be uploaded again
+without compiling it again. The job summary reports this location. These retained
+workspaces remain subject to the two-day scheduled workspace policy below.
+
 Builder CLI commands handle both SIGINT and SIGTERM, including when the Actions
 shell inherited SIGINT as ignored. Each upstream command uses a separate process
 group; cancellation terminates that command's descendants before releasing the
@@ -91,6 +97,30 @@ An idle manual maintenance run can also use
 is not installed or enabled automatically by the build workflow.
 
 ## Capacity checks and recovery
+
+### Retry publication from a retained output
+
+Use the retained workspace reported in the job summary, its release tag, and the
+exact builder SHA from that workflow run. With GitHub CLI authenticated:
+
+```sh
+GH_TOKEN="$(gh auth token)" python3 scripts/releases.py stage \
+  --work /absolute/marked/workspace --repository ITJamie/sonic-vs-builder \
+  --tag sonic-202605-RUN-ATTEMPT --target BUILDER_COMMIT_SHA
+GH_TOKEN="$(gh auth token)" python3 scripts/releases.py finish \
+  --repository ITJamie/sonic-vs-builder --tag sonic-202605-RUN-ATTEMPT --images kvm
+python3 scripts/sonic_vs.py cleanup --work /absolute/marked/workspace
+```
+
+Adjust `--images` to the selected outputs; all selected assets must be uploaded
+before finishing. The upload rechecks the archive checksum. If an earlier upload
+left conflicting asset names in a draft, use a fresh recovery tag (anchor it with
+`scripts/releases.py anchor --repository OWNER/REPO --tag TAG --target SHA`) rather
+than overwriting assets. After recovery, normal cleanup removes the workspace.
+To deliberately discard an unpublished retained archive instead, use
+`scripts/sonic_vs.py cleanup --work /absolute/marked/workspace --discard-output`.
+
+### Free-space guard
 
 The 300 GiB pre-build guard remains enabled. A cleanup run is best effort;
 retained images, native caches or unrelated host files can prevent reaching the

@@ -69,6 +69,14 @@ Docker image layers are stored separately in the runner's Docker storage, not `~
 
 Each branch/build attempt creates a separate release tagged `sonic-<branch>-<run-id>-<attempt>`, attached to the builder commit used by the workflow. Existing published releases are never overwritten and no release is automatically designated Latest.
 
+The preparation job anchors this Git tag and verifies draft-release creation
+before any expensive build starts. This keeps the exact builder commit usable
+with `GITHUB_TOKEN` if `main`'s workflows change during a long build, as required
+by [GitHub's release permission rules](https://docs.github.com/en/rest/releases/releases#create-a-release).
+A failed attempt can leave its audit tag and incomplete draft; only complete
+selected outputs are published. If upload fails after successful validation,
+cleanup retains the archive locally for [publication recovery](docs/maintenance.md#retry-publication-from-a-retained-output).
+
 For the default `all` selection, a complete release contains:
 
 | Output | Purpose |

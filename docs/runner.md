@@ -129,6 +129,11 @@ mode and the constraint/hook/patch input key.
 Each build job reports `docker system df` before and after building, including
 after failures. These reporting steps do not block builds if reporting fails.
 
+The layer key includes source hooks and their configuration, constraints and
+branch patches. It excludes the hook package `.deb` and its `tmp/` staging tree:
+`make init` regenerates those files with archive metadata on each run, so hashing
+them would invalidate otherwise identical build containers every time.
+
 For a fresh-image investigation, first stop the runner and confirm no build is
 active. Record and remove only the specific completed build-container tags shown
 in the affected build log, then dispatch with `docker_layer_cache=false`. This

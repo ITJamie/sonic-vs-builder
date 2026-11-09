@@ -237,7 +237,11 @@ def stamp_docker_cache_inputs(source, patches):
     inputs += sorted(path for path in hooks.rglob("*") if path.is_file()
                      and not any(part.startswith(".") or part == "__pycache__"
                                  for part in path.relative_to(hooks).parts)
-                     and path.suffix != ".pyc")
+                     # make init builds the hook package before stamping. Its
+                     # archive metadata and tmp/ staging tree are generated
+                     # outputs, not inputs; hashing them defeats warm reuse.
+                     and path.relative_to(hooks).parts[0] != "tmp"
+                     and path.suffix not in (".pyc", ".deb"))
     identities = [{"path": str(path.relative_to(source)), "sha256": checksum(path)} for path in inputs]
     patch_ids = [{"path": item["path"], "sha256": item["sha256"]} for item in patches]
     digest = hashlib.sha256(json.dumps({"inputs": identities, "patches": patch_ids},

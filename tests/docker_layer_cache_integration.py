@@ -66,6 +66,16 @@ with tempfile.TemporaryDirectory() as directory:
     try:
         first = build("cold")
         assert build("warm") == first, "Identical inputs failed to reuse the installation layer"
+        package = source / "src/sonic-build-hooks/buildinfo/sonic-build-hooks_1.0_all.deb"
+        package.parent.mkdir(parents=True)
+        staging = source / "src/sonic-build-hooks/tmp/sonic-build-hooks/scripts/probe"
+        staging.parent.mkdir(parents=True)
+        package.write_bytes(b"generated package, timestamp one")
+        staging.write_text("generated staging copy")
+        assert build("generated hook package") == first, "Generated outputs invalidated source cache inputs"
+        package.write_bytes(b"generated package, timestamp two")
+        staging.write_text("rebuilt staging copy")
+        assert build("repacked hook package") == first, "Repackaging identical hooks discarded a reusable install layer"
         versions.write_text("dependency==2\n")
         changed = build("changed constraint")
         assert changed.splitlines()[0] != first.splitlines()[0], "Constraint change retained an old install layer"

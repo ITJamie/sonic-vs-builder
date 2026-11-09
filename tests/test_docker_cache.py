@@ -61,6 +61,24 @@ class DockerCache(unittest.TestCase):
         patches[0]["status"] = "already-applied"
         self.assertEqual(builder.stamp_docker_cache_inputs(self.root, patches)["input_sha256"], keys[-1])
 
+    def test_generated_hook_package_and_staging_do_not_invalidate(self):
+        hooks = self.hook.parents[1]
+        package = hooks / "buildinfo/sonic-build-hooks_1.0_all.deb"
+        config = hooks / "buildinfo/config/buildinfo.config"
+        config.parent.mkdir(parents=True)
+        config.write_text("tracked configuration")
+        first = builder.stamp_docker_cache_inputs(self.root, [])
+        package.write_bytes(b"first package with timestamp metadata")
+        staging = hooks / "tmp/sonic-build-hooks/usr/local/share/buildinfo/scripts/hook"
+        staging.parent.mkdir(parents=True)
+        staging.write_text("generated staging copy")
+        self.assertEqual(builder.stamp_docker_cache_inputs(self.root, []), first)
+        package.write_bytes(b"rebuilt package with different timestamps")
+        staging.write_text("new staging copy")
+        self.assertEqual(builder.stamp_docker_cache_inputs(self.root, []), first)
+        config.write_text("changed tracked configuration")
+        self.assertNotEqual(builder.stamp_docker_cache_inputs(self.root, [])["input_sha256"], first["input_sha256"])
+
     def test_cache_enabled_flags_and_metadata_reach_build_with_package_cache_off(self):
         work = self.root / "work"
         work.mkdir()

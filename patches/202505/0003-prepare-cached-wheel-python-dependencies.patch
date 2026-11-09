@@ -1,0 +1,32 @@
+Subject: [202505] Prepare pinned Python packages for cached wheel installation
+
+A cold wheel build first installs dependencies into the builder user site.
+Restoring a cached wheel skips that step, exposing Debian's distutils-owned
+pexpect 4.8.0 to the later root pip install. The upstream 4.9.0 constraint
+then fails because pip cannot uninstall that Debian package.
+
+Install the pinned pexpect and pycparser copies into /usr/local before wheel
+installation, without uninstalling or modifying Debian-owned files. Limit
+--ignore-installed and --no-deps to these two packages; pexpect's ptyprocess
+requirement is already supplied by Debian and pycparser has no dependencies.
+All subsequent wheel installs retain normal dependency resolution and tests.
+No upstream version constraints change.
+
+Failure: https://github.com/ITJamie/sonic-vs-builder/actions/runs/42709123480
+Tested against sonic-buildimage ff3c0c9f686a1d0dbddbe813b233b3b7a51bd8e2.
+Remove when the builder handles Debian/pip ownership for cached wheel installs.
+
+--- a/sonic-slave-bookworm/Dockerfile.j2
++++ b/sonic-slave-bookworm/Dockerfile.j2
+@@ -554,6 +554,11 @@
+ {%- endif %}
+ {%- endif %}
+ 
++# Cached wheels skip the user-site dependency installation performed on a cold build.
++# Shadow these distutils packages without uninstalling Debian-owned files.
++# Versions match files/build/versions/build/build-sonic-slave-bookworm/versions-py3.
++RUN pip3 install --ignore-installed --no-deps pexpect==4.9.0 pycparser==3.0
++
+ # For building sonic-utilities
+ RUN pip3 install fastentrypoints mock
+ 

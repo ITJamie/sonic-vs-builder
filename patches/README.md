@@ -55,6 +55,13 @@ are recorded under `compatibility_fixes`.
   for this target. Other warnings retain `-Werror`, and no tests or source
   bindings are removed. CI reproduces the failure with GCC 12 and checks that the
   patched target flags compile while unrelated warnings still fail the build.
+- `202505/0003-prepare-cached-wheel-python-dependencies.patch`: prepare the
+  upstream-pinned `pexpect` and `pycparser` copies in the Bookworm builder so
+  cached wheel installation works without a prior user-site dependency install.
+  Only these two packages use `--ignore-installed --no-deps`; their Debian-owned
+  copies stay intact. Subsequent wheel installs retain dependency resolution.
+  CI reproduces both distutils uninstall failures, verifies pinned imports and
+  `pip check`, and checks that Debian's files are unchanged.
 - `202605/0001-fix-blessed-wcwidth-constraint.patch`: change the Bookworm build
   constraint from `wcwidth==0.7.0` to `wcwidth==0.9.2`, satisfying the pinned
   `blessed==1.52.0` requirement. Tracks

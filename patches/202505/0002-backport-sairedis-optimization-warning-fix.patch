@@ -1,0 +1,27 @@
+Subject: [202505] Backport the sairedis Python binding optimization warning fix
+
+GCC 12 skips optional GCSE/PRE optimization for the large SWIG-generated
+pysairedis_wrap.cpp, and -Werror makes the diagnostic fatal. Backport only
+the target-specific compiler change from the merged upstream fix. Keep the
+warning visible, retain -Werror for other diagnostics, and leave all tests
+and generated binding contents unchanged.
+
+Upstream PR: https://github.com/sonic-net/sonic-sairedis/pull/2109
+Also merged for 202605: https://github.com/sonic-net/sonic-sairedis/pull/2108
+Failure: https://github.com/ITJamie/sonic-vs-builder/actions/runs/42689831978
+Verified against sonic-buildimage ff3c0c9f686a1d0dbddbe813b233b3b7a51bd8e2,
+with sonic-sairedis pinned at 14db8ad4452f70f375795b2d7d7bf797d2c012b5.
+Remove once the 202505 submodule includes the upstream compiler fix.
+
+--- a/src/sonic-sairedis/pyext/py3/Makefile.am
++++ b/src/sonic-sairedis/pyext/py3/Makefile.am
+@@ -10,7 +10,8 @@
+ 
+ _pysairedis_la_SOURCES = pysairedis_wrap.cpp $(SOURCES)
+ _pysairedis_la_CXXFLAGS = $(PYTHON3_CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON) \
+-						  -Wno-cast-qual -Wno-shadow -Wno-redundant-decls -Wno-conversion $(NO_CAST_FUNCTION_TYPE)
++						  -Wno-cast-qual -Wno-shadow -Wno-redundant-decls -Wno-conversion $(NO_CAST_FUNCTION_TYPE) \
++						  -Wno-error=disabled-optimization
+ 
+ _pysairedis_la_LDFLAGS = -module \
+ 		-lhiredis -lswsscommon -lpthread \

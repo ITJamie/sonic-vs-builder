@@ -49,6 +49,12 @@ are recorded under `compatibility_fixes`.
   Makefile's configure and three target routes, preserving Bookworm and explicit
   legacy overrides. It evaluates the upstream Docker dependency graphs and checks
   that none of our selected outputs requires a Buster or Bullseye container.
+- `202505/0002-backport-sairedis-optimization-warning-fix.patch`: backport the
+  Python 3 extension compiler fix from merged [sairedis #2109](https://github.com/sonic-net/sonic-sairedis/pull/2109).
+  GCC's optional optimization limit diagnostic remains visible but is nonfatal
+  for this target. Other warnings retain `-Werror`, and no tests or source
+  bindings are removed. CI reproduces the failure with GCC 12 and checks that the
+  patched target flags compile while unrelated warnings still fail the build.
 - `202605/0001-fix-blessed-wcwidth-constraint.patch`: change the Bookworm build
   constraint from `wcwidth==0.7.0` to `wcwidth==0.9.2`, satisfying the pinned
   `blessed==1.52.0` requirement. Tracks

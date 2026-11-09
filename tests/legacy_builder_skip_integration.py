@@ -23,6 +23,12 @@ with tempfile.TemporaryDirectory() as directory:
     source.mkdir()
     original = urllib.request.urlopen(URL, timeout=60).read().decode()
     (source / "Makefile").write_text(original)
+    binding = source / "src/sonic-sairedis/pyext/py3/Makefile.am"
+    binding.parent.mkdir(parents=True)
+    binding.write_bytes(urllib.request.urlopen(
+        "https://raw.githubusercontent.com/sonic-net/sonic-sairedis/"
+        "14db8ad4452f70f375795b2d7d7bf797d2c012b5/pyext/py3/Makefile.am",
+        timeout=60).read())
     subprocess.run(["git", "init", "-q", str(source)], check=True)
     # Keep the real upstream Makefile and recursive make selection. Replace only
     # the expensive leaf build commands with a trace of the environment/target.
@@ -49,7 +55,7 @@ with tempfile.TemporaryDirectory() as directory:
         before = visits(target)
         assert {item[0] for item in before} == {"buster", "bullseye", "bookworm"}, (target, before)
     result = apply_branch_patches(source, work, "202505")
-    assert len(result) == 1 and result[0]["status"] == "applied", result
+    assert len(result) == 2 and all(item["status"] == "applied" for item in result), result
     assert (source / "Makefile").read_text() == original.replace(
         "NOBUSTER ?= 0\n", "NOBUSTER ?= 1\n", 1).replace(
         "NOBULLSEYE ?= 0\n", "NOBULLSEYE ?= 1\n", 1)

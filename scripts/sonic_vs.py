@@ -2,6 +2,8 @@
 """Build upstream SONiC VS Docker, KVM and Broadcom images and publish VS to GHCR (stdlib only)."""
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import gzip
 import hashlib
 import json
@@ -20,6 +22,30 @@ SHA = re.compile(r"[0-9a-f]{40}\Z")
 MARKER = ".sonic-vs-builder"
 TARGETS = {"vs": "docker-sonic-vs.gz", "kvm": "sonic-vs.img.gz", "broadcom": "sonic-broadcom.bin"}
 PATCHES = Path(__file__).resolve().parents[1] / "patches"
+
+
+def maintenance_root(directory=None, work=None):
+    if directory is None and work is not None:
+        record = Path(work) / "runner-lock.json"
+        if record.is_file():
+            directory = json.loads(record.read_text())["root"]
+    root = Path(directory or os.environ.get("SONIC_CACHE_DIR") or
+                Path.home() / ".cache/sonic-vs-builder").expanduser()
+    if not root.is_absolute():
+        raise ValueError("Maintenance/cache directory must be absolute")
+    return root.resolve()
+
+
+@contextmanager
+def runner_lock(root, blocking=True):
+    """Coordinate builder commands with scheduled maintenance on this host."""
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / "maintenance.lock").open("a+") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        try:
+            yield
+        finally:
+            fcntl.flock(stream, fcntl.LOCK_UN)
 
 
 def checksum(path):
@@ -621,6 +647,18 @@ def main():
             command.add_argument("--repository", required=True)
             command.add_argument("--dockerhub", choices=("true", "false"), default="false")
     args = parser.parse_args()
+    if args.command == "prepare":
+        dispatch(args)
+        return
+    work = owned_work(args.work) if hasattr(args, "work") else None
+    root = maintenance_root(getattr(args, "cache_dir", None), work)
+    with runner_lock(root):
+        if args.command == "build":
+            write_json(work / "runner-lock.json", {"root": str(root)})
+        dispatch(args)
+
+
+def dispatch(args):
     if args.command == "prepare":
         print(json.dumps(prepare(args.branches, args.build_jobs, args.images), separators=(",", ":")))
     elif args.command == "create-work":

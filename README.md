@@ -108,6 +108,12 @@ Both commands must succeed without logging in. The digest pull verifies the exac
 
 ## Build results and failures
 
+For cleanup after failures and scheduled storage retention, use the
+[maintenance plan and installation guide](docs/maintenance.md). It includes a
+dry-run-first cleanup script and an hourly systemd timer for the dedicated runner.
+Maintenance skips active jobs and shares a lock with build/publication/cleanup
+commands. Native package and download caches remain intact.
+
 The Actions job summary links to the published release. VS metadata contains the upstream branch, commit SHA, image ID and a `registries` map with each published image's reference, digest and pull command; the top-level image/digest fields continue to identify GHCR. Broadcom metadata records its output checksum and size. Each platform uploads build and publication logs, including on failure, as Actions artifacts with 14-day retention. The images are retained as release downloads; the VS image is also available through the selected registries. Large binaries are not duplicated in Actions artifacts.
 
 A failed build or smoke check skips publication, leaving the existing registry tag untouched. A successful push followed by a metadata or cleanup failure can still have updated the registry tag; inspect the publication log in that case. If a job waits indefinitely, check the runner is online with all four labels: `self-hosted`, `linux`, `x64`, `sonic-vs`.

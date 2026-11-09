@@ -1,0 +1,11 @@
+[Unit]
+Description=Check SONiC runner retention hourly while idle
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5m
+Persistent=true
+Unit=sonic-vs-maintenance.service
+
+[Install]
+WantedBy=timers.target

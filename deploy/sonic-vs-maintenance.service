@@ -1,0 +1,13 @@
+[Unit]
+Description=Retain SONiC runner caches within configured limits
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=github-runner
+Group=github-runner
+WorkingDirectory=/home/github-runner/sonic-vs-maintenance
+ExecStart=/usr/bin/python3 /home/github-runner/sonic-vs-maintenance/scripts/maintenance.py --cache-dir /home/github-runner/.cache/sonic-vs-builder --work-root /home/github-runner/actions-runner/_work/_temp --sonic-images --builder default --apply
+Nice=10
+IOSchedulingClass=idle

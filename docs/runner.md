@@ -63,6 +63,11 @@ Broadcom-only builds do not require it.
 
 ## Persistent cache maintenance
 
+Use the [failed-build cleanup and scheduled retention guide](maintenance.md)
+for the maintenance script, default retention policy and optional hourly timer.
+Review its dry run before enabling deletion; the build workflow does not install
+or schedule host maintenance automatically.
+
 The builder automatically creates `~/.cache/sonic-vs-builder` as the runner service account. It survives temporary workspace cleanup and is shared by later jobs on this host. A small cached Docker utility image supplies ACL tools; no additional host packages or sudo rules are needed. Before each cached build, it repairs existing cache permissions and sets inherited default ACLs so root hooks and the non-root build user can both write future cache files. Helpers run without networking and mount only the selected cache directory. GitHub-hosted validation jobs test this behavior in a temporary cache without populating the runner cache.
 
 The layout is:

@@ -28,6 +28,8 @@ jobs:
         run: python3 tests/rsync_cleanup_integration.py
       - name: Branch patches and upstream Python dependency regression
         run: python3 tests/branch_patches_integration.py
+      - name: 202505 native Buster skip and target routing regression
+        run: python3 tests/buster_skip_integration.py
       - name: Docker layer cache reuse and invalidation
         run: python3 tests/docker_layer_cache_integration.py
       - name: VS runtime Debian and pip package ownership regression

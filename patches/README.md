@@ -39,6 +39,14 @@ are recorded under `compatibility_fixes`.
 
 ## Current patches
 
+- `202505/0001-skip-unused-buster-builder.patch`: use upstream's `NOBUSTER=1`
+  default for our three selected image targets. This avoids eagerly preparing
+  the unused Buster builder, whose security mirror returns 404. Bullseye and
+  Bookworm stay enabled; optional Buster-based PTF test images are outside these
+  outputs. An explicit `NOBUSTER=0` restores the upstream setting. Tested against
+  `ff3c0c9f686a1d0dbddbe813b233b3b7a51bd8e2`; CI exercises the actual upstream
+  Makefile's configure and three target routes, preserving both remaining build
+  environments and the explicit override.
 - `202605/0001-fix-blessed-wcwidth-constraint.patch`: change the Bookworm build
   constraint from `wcwidth==0.7.0` to `wcwidth==0.9.2`, satisfying the pinned
   `blessed==1.52.0` requirement. Tracks

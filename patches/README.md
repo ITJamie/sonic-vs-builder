@@ -52,3 +52,7 @@ are recorded under `compatibility_fixes`.
   [sonic-buildimage #30609](https://github.com/sonic-net/sonic-buildimage/issues/30609).
   The regression test reproduces the distutils uninstall error and verifies the
   package removal followed by pip installation. No runtime version pins change.
+- `202605/0003-preserve-groff-build-inputs.patch`: retain groff device files and
+  macros in build containers so Trixie's Bash package can compile its PDF docs.
+  Runtime image cleanup remains enabled. CI reproduces the original failure and
+  checks PostScript/PDF generation under fakeroot after the patched cleanup.

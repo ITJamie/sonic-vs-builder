@@ -1,0 +1,29 @@
+Subject: [202605] Preserve groff build data in sonic-slave containers
+
+post_run_cleanup deletes /usr/share/groff, including the PostScript DESC
+file and macro definitions required to compile Bash documentation on Trixie.
+Keep those tool inputs in build containers; retain runtime image cleanup.
+The failing build reached binary-doc but could not generate bash.pdf.
+
+Verified source: 8076a44fa579fde75f73299f03e7f3cac298d9e3.
+Failure: https://github.com/ITJamie/sonic-vs-builder/actions/runs/42528445500
+Remove when upstream cleanup preserves build-time groff inputs.
+
+--- a/src/sonic-build-hooks/scripts/post_run_cleanup
++++ b/src/sonic-build-hooks/scripts/post_run_cleanup
+@@ -46,9 +46,14 @@
+ while [ -n "$(find /usr/share/doc -depth -type d -empty -print -exec rmdir {} +)" ]; do :; done && \
+     rm -rf               \
+     /usr/share/man/*     \
+-    /usr/share/groff/*   \
+     /usr/share/info/*    \
+     /usr/share/lintian/* \
+     /usr/share/linda/*   \
+     /var/cache/man/*     \
+     /usr/share/locale/*
++
++# groff device descriptions/macros are compiler inputs, not disposable docs.
++# Packages such as Bash generate documentation inside sonic-slave containers.
++if [[ ! ${IMAGENAME} =~ -slave- ]]; then
++    rm -rf /usr/share/groff/*
++fi

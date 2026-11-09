@@ -6,6 +6,14 @@ maintenance handles obsolete build images, bounded Docker build cache, and work
 directories left by a crashed runner or interrupted cleanup. Failed compilations
 may still produce useful native package archives; keep those for the next retry.
 
+Builder CLI commands handle both SIGINT and SIGTERM, including when the Actions
+shell inherited SIGINT as ignored. Each upstream command uses a separate process
+group; cancellation terminates that command's descendants before releasing the
+maintenance lock. This avoids an orphaned build blocking the workflow's cleanup
+step. It does not signal the runner service's shared process group. Unit tests
+exercise a TERM-resistant grandchild and lock release; Docker CI verifies that a
+cancelled command leaves no isolated test container running.
+
 ## Retention policy
 
 | Resource | Policy |

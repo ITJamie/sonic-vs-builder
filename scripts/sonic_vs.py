@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -62,7 +63,47 @@ def checksum(path):
 
 
 def run(*args, **kwargs):
-    return subprocess.run(args, check=True, text=True, **kwargs)
+    # A cancelled Actions shell pipeline can leave Python running with SIGINT
+    # ignored. Give each upstream command its own group so cancellation can
+    # stop make/git/Docker descendants without signalling Runner.Worker.
+    input_data = kwargs.pop("input", None)
+    if input_data is not None:
+        kwargs["stdin"] = subprocess.PIPE
+    with subprocess.Popen(args, text=True, start_new_session=True, **kwargs) as process:
+        try:
+            stdout, stderr = process.communicate(input_data)
+        except BaseException:
+            stop_command(process)
+            raise
+        result = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+        result.check_returncode()
+        return result
+
+
+def stop_command(process):
+    """Terminate only this command's isolated group, including descendants."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    # The direct child can exit before a grandchild that ignores TERM. Do not
+    # leave that grandchild holding files or continuing an abandoned build.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+
+
+def install_signal_handlers():
+    def interrupted(number, frame):
+        raise SystemExit(128 + number)
+    for number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(number, interrupted)
 
 
 def capture(*args, **kwargs):
@@ -420,7 +461,7 @@ def load_untagged(archive):
     # Containerd-backed Docker can report an image ID different from the legacy
     # config hash. Capture Docker's authoritative result without buffering the tar.
     output = tempfile.TemporaryFile(mode="w+")
-    process = subprocess.Popen(["docker", "load"], stdin=subprocess.PIPE, stdout=output)
+    process = subprocess.Popen(["docker", "load"], stdin=subprocess.PIPE, stdout=output, start_new_session=True)
     try:
         with tarfile.open(archive, "r|gz") as source, tarfile.open(fileobj=process.stdin, mode="w|") as target:
             for member in source:
@@ -454,8 +495,7 @@ def load_untagged(archive):
         return identities[0]
     finally:
         if process.poll() is None:
-            process.kill()
-            process.wait()
+            stop_command(process)
         output.close()
 
 
@@ -680,6 +720,7 @@ def dispatch(args):
 
 
 if __name__ == "__main__":
+    install_signal_handlers()
     try:
         main()
     except (ValueError, OSError, subprocess.CalledProcessError) as error:

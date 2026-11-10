@@ -79,14 +79,25 @@ def release(repository, tag):
     # The by-tag endpoint is for published releases. List with write credentials
     # to find drafts too, so the second platform reuses the first platform's draft.
     page = 1
+    drafts = []
     while True:
         batch = api(repository, f"/releases?per_page=100&page={page}")
         for item in batch:
             if item["tag_name"] == tag:
                 return item
+            # GitHub can expose a draft under an untagged-* placeholder even
+            # though creation supplied our anchored tag. Its build-specific
+            # title stays intact. Validate the commit before reusing it.
+            if (item.get("draft") and item["tag_name"].startswith("untagged-") and
+                    item.get("name", "").startswith("SONiC ") and
+                    item.get("name", "").endswith(f" — {tag}")):
+                drafts.append(item)
         if len(batch) < 100:
-            return None
+            break
         page += 1
+    if len(drafts) > 1:
+        raise ValueError("Multiple draft releases match this build; refusing to guess")
+    return drafts[0] if drafts else None
 
 
 def upload(repository, release_id, path):
@@ -99,6 +110,8 @@ def upload(repository, release_id, path):
 
 def draft_release(repository, tag, target, metadata):
     existing = release(repository, tag)
+    if existing and existing["tag_name"] != tag and existing.get("target_commitish") != target:
+        raise ValueError("Draft release does not match this builder commit")
     ztp = metadata.get("enable_ztp")
     ztp_note = ("ZTP: **Enabled** (`ENABLE_ZTP=y`)" if ztp is True else
                 "ZTP: **Disabled** (`ENABLE_ZTP=n`)" if ztp is False else
@@ -198,6 +211,11 @@ def finish(repository, tag, images):
     existing = release(repository, tag)
     if not existing or not existing["draft"]:
         raise ValueError("Expected a draft release for this build")
+    if existing["tag_name"] != tag:
+        reference = api(repository, "/git/ref/tags/" + urllib.parse.quote(tag, safe=""))
+        if (reference["object"].get("type") != "commit" or
+                reference["object"].get("sha") != existing.get("target_commitish")):
+            raise ValueError("Draft release does not match the anchored builder commit")
     expected = selected_images(images)
     # Paginate: split images can produce many assets.
     names = set()
@@ -213,7 +231,7 @@ def finish(repository, tag, images):
                 raise ValueError(f"Release is incomplete: missing {required}")
         if filename not in names and f"{filename}.part0001" not in names:
             raise ValueError(f"Release is incomplete: missing {filename}")
-    published = api(repository, f"/releases/{existing['id']}", "PATCH", {"draft": False, "make_latest": "false"})
+    published = api(repository, f"/releases/{existing['id']}", "PATCH", {"tag_name": tag, "draft": False, "make_latest": "false"})
     print(published["html_url"])
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:

@@ -36,6 +36,35 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(releases.release(REPO, DRAFT["tag_name"]), DRAFT)
         api.assert_called_once_with(REPO, "/releases?per_page=100&page=1")
 
+    def test_placeholder_draft_is_found_by_build_title_and_published_with_original_tag(self):
+        draft = {**DRAFT, "tag_name": "untagged-server-placeholder",
+                 "name": f"SONiC 202605 — {DRAFT['tag_name']}", "target_commitish": "b" * 40}
+        assets = [{"name": name} for name in ("sonic-broadcom.bin", "broadcom-metadata.json",
+                                              "broadcom-SHA256SUMS", "broadcom-README.txt")]
+        with patch.object(releases, "api") as api:
+            api.side_effect = [[draft], {"object": {"type": "commit", "sha": "b" * 40}},
+                               assets, {**DRAFT, "draft": False}]
+            releases.finish(REPO, DRAFT["tag_name"], "broadcom")
+            api.assert_called_with(REPO, "/releases/42", "PATCH",
+                                   {"tag_name": DRAFT["tag_name"], "draft": False, "make_latest": "false"})
+
+    def test_placeholder_draft_does_not_select_another_build_or_wrong_commit(self):
+        draft = {**DRAFT, "tag_name": "untagged-server-placeholder",
+                 "name": f"SONiC 202605 — {DRAFT['tag_name']}", "target_commitish": "c" * 40}
+        with patch.object(releases, "api", return_value=[{**draft, "name": "Another build"}]):
+            self.assertIsNone(releases.release(REPO, DRAFT["tag_name"]))
+        with patch.object(releases, "api", return_value=[draft, {**draft, "id": 43}]):
+            with self.assertRaisesRegex(ValueError, "Multiple draft"):
+                releases.release(REPO, DRAFT["tag_name"])
+        with patch.object(releases, "release", return_value=draft), patch.object(releases, "api") as api:
+            with self.assertRaisesRegex(ValueError, "builder commit"):
+                releases.draft_release(REPO, DRAFT["tag_name"], "b" * 40, {})
+            api.assert_not_called()
+            api.return_value = {"object": {"type": "commit", "sha": "b" * 40}}
+            with self.assertRaisesRegex(ValueError, "anchored builder"):
+                releases.finish(REPO, DRAFT["tag_name"], "broadcom")
+            self.assertEqual(api.call_count, 1)
+
     @patch.object(releases, "api")
     def test_anchor_pins_before_build_and_accepts_same_tag_after_main_moves(self, api):
         api.side_effect = [releases.GitHubAPIError("GET", "/git/ref/tags/build", 404, "Not Found"), {}]
@@ -210,7 +239,7 @@ class ReleaseTests(unittest.TestCase):
                  "broadcom-metadata.json", "broadcom-SHA256SUMS", "broadcom-README.txt", "sonic-broadcom.bin.part0001"]
         api.side_effect = [[{"name": name} for name in names], {**DRAFT, "draft": False}]
         releases.finish(REPO, DRAFT["tag_name"], "both")
-        api.assert_called_with(REPO, "/releases/42", "PATCH", {"draft": False, "make_latest": "false"})
+        api.assert_called_with(REPO, "/releases/42", "PATCH", {"tag_name": DRAFT["tag_name"], "draft": False, "make_latest": "false"})
 
     @patch.object(releases, "release", return_value=DRAFT)
     @patch.object(releases, "api")
@@ -226,7 +255,7 @@ class ReleaseTests(unittest.TestCase):
         api.side_effect = [[{"name": name} for name in [*names, "sonic-vs.img.gz.part0001"]],
                            {**DRAFT, "draft": False}]
         releases.finish(REPO, DRAFT["tag_name"], "all")
-        api.assert_called_with(REPO, "/releases/42", "PATCH", {"draft": False, "make_latest": "false"})
+        api.assert_called_with(REPO, "/releases/42", "PATCH", {"tag_name": DRAFT["tag_name"], "draft": False, "make_latest": "false"})
 
     @patch.object(releases, "release", return_value=DRAFT)
     @patch.object(releases, "upload")

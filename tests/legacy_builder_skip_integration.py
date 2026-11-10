@@ -4,6 +4,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,36 @@ with tempfile.TemporaryDirectory() as directory:
     template.write_bytes(urllib.request.urlopen(
         f"https://raw.githubusercontent.com/sonic-net/sonic-buildimage/{COMMIT}/"
         "sonic-slave-bookworm/Dockerfile.j2", timeout=60).read())
+    (source / "build_image.sh").write_bytes(urllib.request.urlopen(
+        f"https://raw.githubusercontent.com/sonic-net/sonic-buildimage/{COMMIT}/"
+        "build_image.sh", timeout=60).read())
+    upstream_image_script = (source / "build_image.sh").read_text()
+    installer = urllib.request.urlopen(
+        f"https://raw.githubusercontent.com/sonic-net/sonic-buildimage/{COMMIT}/"
+        "installer/install.sh", timeout=60).read().decode()
+    guard = installer.split("# Verify image platform is inside devices list\n", 1)[1].split(
+        "# If running in ONIE", 1)[0]
+    virtual = source / "device/virtual/x86_64-kvm_x86_64-r0"
+    virtual.mkdir(parents=True)
+    hardware = source / "device/vendor/wrong-asic-platform"
+    hardware.mkdir(parents=True)
+    (hardware / "platform_asic").write_text("broadcom\n")
+
+    def platform_list(script, configured, target):
+        function = re.search(r"generate_device_list\(\)\n\{.*?\n\}", script, re.S).group()
+        subprocess.run(["bash", "-eu", "-c", function + '\ngenerate_device_list platforms_asic'],
+                       cwd=source, check=True,
+                       env={**os.environ, "CONFIGURED_PLATFORM": configured, "TARGET_MACHINE": target})
+        return set((source / "platforms_asic").read_text().splitlines())
+
+    def installer_accepts(platform):
+        return subprocess.run(["bash", "-eu", "-c", guard], cwd=source,
+                              env={**os.environ, "install_env": "onie", "onie_platform": platform},
+                              input="n\n", text=True, capture_output=True).returncode == 0
+
+    # A restored .deb does not run the package recipe that creates this mapping.
+    assert virtual.name not in platform_list(upstream_image_script, "vs", "vs")
+    assert not installer_accepts(virtual.name)
     subprocess.run(["git", "init", "-q", str(source)], check=True)
     # Keep the real upstream Makefile and recursive make selection. Replace only
     # the expensive leaf build commands with a trace of the environment/target.
@@ -60,7 +91,18 @@ with tempfile.TemporaryDirectory() as directory:
         before = visits(target)
         assert {item[0] for item in before} == {"buster", "bullseye", "bookworm"}, (target, before)
     result = apply_branch_patches(source, work, "202505")
-    assert len(result) == 3 and all(item["status"] == "applied" for item in result), result
+    assert len(result) == 4 and all(item["status"] == "applied" for item in result), result
+    patched_image_script = (source / "build_image.sh").read_text()
+    for configured in ("vs", "vpp"):
+        (virtual / "platform_asic").unlink(missing_ok=True)
+        assert platform_list(patched_image_script, configured, configured) == {virtual.name}
+        assert (virtual / "platform_asic").read_text() == configured + "\n"
+        assert installer_accepts(virtual.name)
+        assert not installer_accepts(hardware.name)
+    assert platform_list(patched_image_script, "vs", "broadcom") == {hardware.name}
+    assert not installer_accepts(virtual.name)
+    assert platform_list(patched_image_script, "vs", "generic") == {virtual.name, hardware.name}
+    print("Cached KVM platform mapping restored for VS/VPP; installer ASIC guard preserved")
     assert (source / "Makefile").read_text() == original.replace(
         "NOBUSTER ?= 0\n", "NOBUSTER ?= 1\n", 1).replace(
         "NOBULLSEYE ?= 0\n", "NOBULLSEYE ?= 1\n", 1)

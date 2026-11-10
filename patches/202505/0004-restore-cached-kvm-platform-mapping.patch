@@ -1,0 +1,35 @@
+Subject: [202505] Restore virtual platform mapping before installer assembly
+
+The sonic-device-data recipe generates the single-ASIC KVM platform_asic file
+in the source tree. Restoring its cached Debian package skips this side effect.
+The resulting installer omits x86_64-kvm_x86_64-r0 from platforms_asic, so ONIE
+rejects the VS installer and install_sonic.py times out after repeated attempts.
+
+Regenerate the file before collecting installer platforms, using exactly the
+VS/VPP selection in src/sonic-device-data/Makefile. Keep platform filtering and
+the installer's ASIC compatibility check intact; do not force installation or
+disable package caching.
+
+Origin of dynamic generation: https://github.com/sonic-net/sonic-buildimage/pull/21188
+Failure: https://github.com/ITJamie/sonic-vs-builder/actions/runs/42711418118
+Tested against sonic-buildimage ff3c0c9f686a1d0dbddbe813b233b3b7a51bd8e2.
+Remove when upstream generates installer platform mappings independently of
+whether sonic-device-data is built or restored from cache.
+
+--- a/build_image.sh
++++ b/build_image.sh
+@@ -101,6 +101,14 @@
+ generate_device_list()
+ {
+     local platforms_asic=$1
++
++    # A cached sonic-device-data package skips its source-tree side effect.
++    # Match src/sonic-device-data/Makefile before collecting installer platforms.
++    if [ "$CONFIGURED_PLATFORM" = "vpp" ]; then
++        echo "vpp" > ./device/virtual/x86_64-kvm_x86_64-r0/platform_asic
++    else
++        echo "vs" > ./device/virtual/x86_64-kvm_x86_64-r0/platform_asic
++    fi
+ 
+     # Create an empty function, and later append to it
+     echo -n > $platforms_asic

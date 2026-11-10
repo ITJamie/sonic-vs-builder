@@ -62,6 +62,12 @@ are recorded under `compatibility_fixes`.
   copies stay intact. Subsequent wheel installs retain dependency resolution.
   CI reproduces both distutils uninstall failures, verifies pinned imports and
   `pip check`, and checks that Debian's files are unchanged.
+- `202505/0004-restore-cached-kvm-platform-mapping.patch`: regenerate the
+  virtual platform ASIC mapping before assembling the installer device list.
+  Restoring `sonic-device-data` from cache skips the package recipe's source-tree
+  side effect. The patch preserves upstream VS/VPP selection and the installer's
+  ASIC compatibility check. CI reproduces the missing mapping with the pinned
+  upstream function and verifies VS/VPP acceptance and wrong-ASIC rejection.
 - `202605/0001-fix-blessed-wcwidth-constraint.patch`: change the Bookworm build
   constraint from `wcwidth==0.7.0` to `wcwidth==0.9.2`, satisfying the pinned
   `blessed==1.52.0` requirement. Tracks

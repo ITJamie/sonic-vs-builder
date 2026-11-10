@@ -177,3 +177,24 @@ docker pull itjamie/docker-sonic-vs:202605
 ```
 
 The Broadcom installer is distributed through GitHub Releases, not Docker Hub.
+
+## Empty release cleanup
+
+Release notes record whether ZTP was enabled or disabled. Older build metadata
+that predates the option is labelled "Not recorded" rather than guessing.
+
+`scripts/cleanup_releases.py` lists releases older than two days with **zero
+attached assets**, including failed-build drafts. It keeps releases containing
+any asset (even metadata only), recently edited releases, Git tags and registry
+packages. It rechecks age and assets before deletion. Preview first:
+
+```sh
+GH_TOKEN="$(gh auth token)" python3 scripts/cleanup_releases.py --repository ITJamie/sonic-vs-builder
+GH_TOKEN="$(gh auth token)" python3 scripts/cleanup_releases.py --repository ITJamie/sonic-vs-builder --apply
+```
+
+The token needs repository Contents write access and visibility of drafts.
+`--days` can increase retention; two days is the minimum. The `--apply` command
+can be scheduled daily through cron or a separate maintenance workflow. No
+schedule is installed automatically. GitHub's automatic source-code archives do
+not count as attached assets; this script does not manage GHCR packages.

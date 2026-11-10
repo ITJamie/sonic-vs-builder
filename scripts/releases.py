@@ -28,7 +28,7 @@ class GitHubAPIError(ValueError):
 def response_json(request, timeout):
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.load(response)
+            return None if getattr(response, "status", None) == 204 else json.load(response)
     except urllib.error.HTTPError as error:
         try:
             message = json.load(error).get("message", error.reason)
@@ -99,6 +99,11 @@ def upload(repository, release_id, path):
 
 def draft_release(repository, tag, target, metadata):
     existing = release(repository, tag)
+    ztp = metadata.get("enable_ztp")
+    ztp_note = ("ZTP: **Enabled** (`ENABLE_ZTP=y`)" if ztp is True else
+                "ZTP: **Disabled** (`ENABLE_ZTP=n`)" if ztp is False else
+                "ZTP: **Not recorded** (older build)")
+    ztp_note += ". Applies to KVM/hardware installers; the reduced Docker VS image does not include ZTP."
     if existing is None:
         existing = api(repository, "/releases", "POST", {
             "tag_name": tag, "target_commitish": target, "name": f"SONiC {metadata['branch']} — {tag}",
@@ -106,11 +111,20 @@ def draft_release(repository, tag, target, metadata):
             "body": f"Source: {metadata['upstream']}\n\nBranch: `{metadata['branch']}`\n\n"
                     f"Upstream commit: `{metadata['commit']}`\n\n"
                     f"Builder commit: `{target}`\n\n"
+                    f"{ztp_note}\n\n"
                     f"[Build logs](https://github.com/{repository}/actions/runs/{os.environ['GITHUB_RUN_ID']})\n\n"
                     "Each selected platform has a metadata JSON, SHA256SUMS and download instructions. "
                     "Files at or above 2 GiB are split; reassemble their parts before use. "
                     "The Broadcom installer is not hardware-boot-tested by this workflow.\n",
         })
+    elif existing["draft"] and ztp is not None:
+        # Preserve other notes when staging later platforms in the same draft.
+        body = existing.get("body") or ""
+        updated = re.sub(r"^ZTP:.*$", ztp_note, body, flags=re.MULTILINE)
+        if updated == body and not re.search(r"^ZTP:", body, re.MULTILINE):
+            updated = body.rstrip() + "\n\n" + ztp_note + "\n"
+        if updated != body:
+            existing = api(repository, f"/releases/{existing['id']}", "PATCH", {"body": updated})
     if not existing["draft"]:
         raise ValueError("Refusing to change an already published release; start a new workflow run")
     return existing

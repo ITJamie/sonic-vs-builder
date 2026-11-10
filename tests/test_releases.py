@@ -140,6 +140,34 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(body["tag_name"], DRAFT["tag_name"])
         self.assertEqual(body["make_latest"], "false")
 
+    def test_ztp_setting_in_new_release_notes(self):
+        metadata = json.loads((self.work / "validated.json").read_text())
+        for enabled, label in ((True, "Enabled"), (False, "Disabled"), (None, "Not recorded")):
+            values = dict(metadata)
+            if enabled is not None:
+                values["enable_ztp"] = enabled
+            with patch.object(releases, "release", return_value=None), \
+                    patch.object(releases, "api", return_value=DRAFT) as api, \
+                    patch.dict(os.environ, {"GITHUB_RUN_ID": "123"}):
+                releases.draft_release(REPO, DRAFT["tag_name"], "b" * 40, values)
+                self.assertIn(f"ZTP: **{label}**", api.call_args.args[3]["body"])
+
+    def test_existing_draft_gets_ztp_note_without_losing_other_notes(self):
+        draft = {**DRAFT, "body": "Existing notes\n\nZTP: **Disabled**\n"}
+        with patch.object(releases, "release", return_value=draft), \
+                patch.object(releases, "api", return_value=draft) as api:
+            releases.draft_release(REPO, DRAFT["tag_name"], "b" * 40, {"enable_ztp": True})
+            body = api.call_args.args[3]["body"]
+            self.assertIn("Existing notes", body)
+            self.assertIn("ZTP: **Enabled**", body)
+            self.assertNotIn("ZTP: **Disabled**", body)
+
+    def test_delete_api_accepts_no_content(self):
+        with patch.object(releases.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.status = 204
+            with patch.dict(os.environ, {"GH_TOKEN": "test"}):
+                self.assertIsNone(releases.api(REPO, "/releases/42", "DELETE"))
+
     @patch.object(releases, "release", return_value=DRAFT)
     @patch.object(releases, "upload")
     def test_split_output_reassembles_exactly_and_cleans_temporary_parts(self, upload, _release):

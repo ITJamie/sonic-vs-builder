@@ -100,8 +100,8 @@ class WorkTests(unittest.TestCase):
                 patch.object(builder, "cache_settings", return_value=[]):
             builder.build(self.work, "202605", COMMIT, "3", "broadcom")
         calls = [call.args for call in run.call_args_list]
-        self.assertIn(("make", "UNATTENDED=y", "configure", "PLATFORM=broadcom", "PLATFORM_ARCH=amd64"), calls)
-        self.assertIn(("make", "UNATTENDED=y", "SONIC_BUILD_JOBS=3", "target/sonic-broadcom.bin"), calls)
+        self.assertIn(("make", "UNATTENDED=y", "ENABLE_ZTP=n", "configure", "PLATFORM=broadcom", "PLATFORM_ARCH=amd64"), calls)
+        self.assertIn(("make", "UNATTENDED=y", "ENABLE_ZTP=n", "SONIC_BUILD_JOBS=3", "target/sonic-broadcom.bin"), calls)
         smoke.assert_not_called()
         metadata = json.loads((self.work / "validated.json").read_text())
         self.assertEqual(metadata["platform"], "broadcom")

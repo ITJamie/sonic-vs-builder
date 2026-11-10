@@ -51,8 +51,8 @@ class KVM(unittest.TestCase):
                 builder.build(work, "202605", "a" * 40, 3, "kvm")
             preflight.assert_called_once_with(work.resolve(), require_kvm=True)
             calls = [call.args for call in run.call_args_list]
-            self.assertIn(("make", "UNATTENDED=y", "configure", "PLATFORM=vs", "PLATFORM_ARCH=amd64"), calls)
-            self.assertIn(("make", "UNATTENDED=y", "SONIC_BUILD_JOBS=3", "target/sonic-vs.img.gz"), calls)
+            self.assertIn(("make", "UNATTENDED=y", "ENABLE_ZTP=n", "configure", "PLATFORM=vs", "PLATFORM_ARCH=amd64"), calls)
+            self.assertIn(("make", "UNATTENDED=y", "ENABLE_ZTP=n", "SONIC_BUILD_JOBS=3", "target/sonic-vs.img.gz"), calls)
             load.assert_not_called()
             metadata = json.loads((work / "validated.json").read_text())
             self.assertEqual(metadata["platform"], "kvm")

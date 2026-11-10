@@ -528,7 +528,7 @@ def validate_kvm(archive):
 
 
 def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", cache_dir=None,
-          docker_layer_cache=True):
+          docker_layer_cache=True, enable_ztp=False):
     work = owned_work(work)
     if platform not in TARGETS:
         raise ValueError("Unsupported build platform")
@@ -558,12 +558,14 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
         write_json(work / "docker-cache.json", docker_cache)
     for args in (("configure", f"PLATFORM={configured_platform}", "PLATFORM_ARCH=amd64"),
                  (f"SONIC_BUILD_JOBS={jobs}", f"target/{filename}")):
-        run("make", "UNATTENDED=y", *cache_args, *docker_args, *args, cwd=source)
+        run("make", "UNATTENDED=y", *cache_args, *docker_args,
+            f"ENABLE_ZTP={'y' if enable_ztp else 'n'}", *args, cwd=source)
     archive = source / "target" / filename
     metadata = {"upstream": UPSTREAM, "branch": branch, "commit": commit,
                 "platform": platform, "filename": filename, "compatibility_fixes": compatibility,
                 "patches": patches, "docker_layer_cache": docker_cache,
-                "configured_platform": configured_platform}
+                "configured_platform": configured_platform,
+                "enable_ztp": enable_ztp}
     if platform == "vs":
         config_digest = archive_image(archive)
         previous_images = set(capture("docker", "image", "ls", "--all", "--quiet", "--no-trunc").splitlines())
@@ -723,6 +725,8 @@ def main():
             command.add_argument("--cache-mode", choices=("read-write", "off"), default="read-write")
             command.add_argument("--cache-dir", help="Persistent cache root (or SONIC_CACHE_DIR; defaults to ~/.cache/sonic-vs-builder)")
             command.add_argument("--docker-layer-cache", choices=("true", "false"), default="true")
+            command.add_argument("--enable-ztp", choices=("true", "false"), default="false",
+                                 help="Include ZTP in upstream KVM/hardware installers")
         if name == "publish":
             command.add_argument("--repository", required=True)
             command.add_argument("--dockerhub", choices=("true", "false"), default="false")
@@ -750,7 +754,7 @@ def dispatch(args):
         print(work)
     elif args.command == "build":
         build(args.work, args.branch, args.commit, args.build_jobs, args.platform, args.cache_mode, args.cache_dir,
-              args.docker_layer_cache == "true")
+              args.docker_layer_cache == "true", args.enable_ztp == "true")
     elif args.command == "publish":
         publish(args.work, args.repository, args.dockerhub == "true")
     else:

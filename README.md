@@ -36,7 +36,21 @@ All names are validated and resolved before any self-hosted job starts. Whitespa
 
 Versions run sequentially and independently: failure of one version does not cancel the others. Within a version, VS Docker builds first, KVM second, and Broadcom third. Each output is uploaded and its workspace removed before the next stage begins. Failure of an earlier step stops the remaining steps for that version. Build workflows share a concurrency group with cancellation disabled, preventing two builds from sharing the host. GitHub concurrency retains only one pending run, so submitting more runs while one is already pending can replace that pending run; submit several versions together in one branch list.
 
-Each platform uses a fresh checkout of the same resolved upstream commit, then runs `make init`, `make configure PLATFORM=<vs|broadcom> PLATFORM_ARCH=amd64`, and `make SONIC_BUILD_JOBS=<jobs> <target>` with `UNATTENDED=y`. Targets are `target/docker-sonic-vs.gz`, `target/sonic-vs.img.gz`, and `target/sonic-broadcom.bin`. The KVM stage configures upstream `PLATFORM=vs`, just like the Docker stage. Upstream tests and defaults remain enabled. The Broadcom target uses upstream's dependency selection, which can also build components for related Broadcom variants; this workflow uploads only the requested installer. Other historical branches may need a different upstream environment; compatibility is established by successful builds, not guaranteed for every release.
+Set `enable_ztp=true` to include upstream Zero Touch Provisioning support in
+KVM and Broadcom installers, using `ENABLE_ZTP=y` during configuration and build.
+It defaults to `false` (`ENABLE_ZTP=n`). For example:
+
+```sh
+gh workflow run build.yml --repo ITJamie/sonic-vs-builder -f branches=202505 -f images=all -f enable_ztp=true
+```
+
+The reduced Docker VS target does not install ZTP through this upstream flag;
+select KVM or a hardware installer for ZTP. Build metadata records `enable_ztp`.
+Package caches remain separated by branch, with upstream dependency checks
+controlling reuse. Registry tags still use the branch name, so rebuilding with a
+different setting replaces that branch's VS tag; release downloads remain per build.
+
+Each platform uses a fresh checkout of the same resolved upstream commit, then runs `make init`, `make configure PLATFORM=<vs|broadcom> PLATFORM_ARCH=amd64`, and `make SONIC_BUILD_JOBS=<jobs> <target>` with `UNATTENDED=y`. Targets are `target/docker-sonic-vs.gz`, `target/sonic-vs.img.gz`, and `target/sonic-broadcom.bin`. The KVM stage configures upstream `PLATFORM=vs`, just like the Docker stage. Upstream tests remain enabled; the ZTP option is set explicitly as described above. The Broadcom target uses upstream's dependency selection, which can also build components for related Broadcom variants; this workflow uploads only the requested installer. Other historical branches may need a different upstream environment; compatibility is established by successful builds, not guaranteed for every release.
 
 Branch-specific fixes live in [`patches/<upstream-branch>/`](patches/README.md). Numbered `*.patch` files apply in order after submodule initialization and before configuration, for all selected outputs and with either cache mode. A patch mismatch stops the build; an already-present fix is recorded rather than applied again. Logs/artifacts retain `patches.json`, and successful image metadata includes patch paths, hashes and statuses. Patch identities refresh cached build/runtime images when fixes change. The first patch corrects the incompatible `blessed`/`wcwidth` build constraints on `202605`, tracked in [upstream issue #30604](https://github.com/sonic-net/sonic-buildimage/issues/30604).
 

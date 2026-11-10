@@ -24,6 +24,11 @@ on:
         required: true
         default: '3'
         type: string
+      enable_ztp:
+        description: Include ZTP in KVM and hardware installers (upstream ENABLE_ZTP)
+        required: true
+        default: false
+        type: boolean
       cache_mode:
         description: Reuse persistent downloads and dependency-checked packages
         required: true
@@ -132,11 +137,12 @@ jobs:
           BRANCH: ${{ matrix.branch }}
           COMMIT: ${{ matrix.commit }}
           BUILD_JOBS: ${{ inputs.build_jobs }}
+          ENABLE_ZTP: ${{ inputs.enable_ztp }}
           CACHE_MODE: ${{ inputs.cache_mode }}
           DOCKER_LAYER_CACHE: ${{ inputs.docker_layer_cache }}
         run: |
           set -o pipefail
-          python3 -u scripts/sonic_vs.py build --platform vs --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" 2>&1 | tee "$WORK/build.log"
+          python3 -u scripts/sonic_vs.py build --platform vs --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" --enable-ztp "$ENABLE_ZTP" 2>&1 | tee "$WORK/build.log"
       - name: Publish validated VS image to selected registries
         if: ${{ contains(matrix.images, 'vs') }}
         env:
@@ -187,11 +193,12 @@ jobs:
           BRANCH: ${{ matrix.branch }}
           COMMIT: ${{ matrix.commit }}
           BUILD_JOBS: ${{ inputs.build_jobs }}
+          ENABLE_ZTP: ${{ inputs.enable_ztp }}
           CACHE_MODE: ${{ inputs.cache_mode }}
           DOCKER_LAYER_CACHE: ${{ inputs.docker_layer_cache }}
         run: |
           set -o pipefail
-          python3 -u scripts/sonic_vs.py build --platform kvm --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" 2>&1 | tee "$WORK/build.log"
+          python3 -u scripts/sonic_vs.py build --platform kvm --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" --enable-ztp "$ENABLE_ZTP" 2>&1 | tee "$WORK/build.log"
       - name: Stage KVM downloads in draft release
         if: ${{ contains(matrix.images, 'kvm') }}
         env:
@@ -231,11 +238,12 @@ jobs:
           BRANCH: ${{ matrix.branch }}
           COMMIT: ${{ matrix.commit }}
           BUILD_JOBS: ${{ inputs.build_jobs }}
+          ENABLE_ZTP: ${{ inputs.enable_ztp }}
           CACHE_MODE: ${{ inputs.cache_mode }}
           DOCKER_LAYER_CACHE: ${{ inputs.docker_layer_cache }}
         run: |
           set -o pipefail
-          python3 -u scripts/sonic_vs.py build --platform broadcom --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" 2>&1 | tee "$WORK/build.log"
+          python3 -u scripts/sonic_vs.py build --platform broadcom --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" --enable-ztp "$ENABLE_ZTP" 2>&1 | tee "$WORK/build.log"
       - name: Stage Broadcom downloads in draft release
         if: ${{ contains(matrix.images, 'broadcom') }}
         env:

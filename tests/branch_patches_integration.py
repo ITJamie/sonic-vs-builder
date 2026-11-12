@@ -8,6 +8,7 @@ import urllib.request
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 from sonic_vs import apply_branch_patches
+from upstream_patch_fixture import populate_patch_sources
 
 COMMIT = "8076a44fa579fde75f73299f03e7f3cac298d9e3"
 CONSTRAINTS = "files/build/versions-public/build/build-sonic-slave-bookworm/versions-py3"
@@ -49,9 +50,11 @@ with tempfile.TemporaryDirectory() as directory:
     sdk.parent.mkdir(parents=True)
     sdk_original = urllib.request.urlopen(f"https://raw.githubusercontent.com/sonic-net/sonic-buildimage/{COMMIT}/{sdk_path}", timeout=60).read().decode()
     sdk.write_text(sdk_original)
+    patches = sorted((Path(__file__).parents[1] / "patches/202605").glob("*.patch"))
+    populate_patch_sources(source, COMMIT, patches)
     subprocess.run(["git", "init", "-q", str(source)], check=True)
     result = apply_branch_patches(source, work, "202605")
-    assert len(result) == 5 and all(item["status"] == "applied" for item in result)
+    assert len(result) == len(patches) and all(item["status"] == "applied" for item in result)
     assert sdk.read_text() == sdk_original.replace(
         "stable_size=0x5500000\n", "stable_size=0x8000000\n"
     ).replace(

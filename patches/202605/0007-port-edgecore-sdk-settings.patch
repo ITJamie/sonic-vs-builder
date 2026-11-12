@@ -1,0 +1,75 @@
+Subject: [202605] Port model-specific AS5835 and AS7726 SDK settings
+
+Extend the AS7326 SDK/VXLAN fixes to AS5835 (Maverick2) and AS7726
+(Trident3), using each model's Edgecore BCM profile at d39662e9.
+AS5835 retains its 8192 overlay egress allocation; AS7726 uses 32768.
+Use the tested AS7326 128 MiB stable-cache allocation for these newer SDK
+builds too, rather than the vendor's old 88 MiB workaround. These two
+models have not been hardware-tested at 128 MiB. AS7816 is Tomahawk2,
+and its vendor profile has none of these RIOT/stable-cache overrides;
+leave its SDK profile unchanged. Preserve ports, aliases and MMU settings.
+References: https://github.com/sonic-net/sonic-buildimage/pull/22641
+https://github.com/edge-core/sonic-buildimage/tree/d39662e996c0e8748c9b96ad88dc5f5f524e8048/device/accton
+
+Verified source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Remove individual fixes when upstream supplies equivalent behavior.
+Software regressions cover these changes; only AS7326 has been
+inspected live. Other models require installation/hardware validation.
+
+--- a/device/accton/x86_64-accton_as5835_54x-r0/Accton-AS5835-54X/mv2-as5835-48x10G+6x100G.config.bcm
++++ b/device/accton/x86_64-accton_as5835_54x-r0/Accton-AS5835-54X/mv2-as5835-48x10G+6x100G.config.bcm
+@@ -35,7 +35,7 @@
+ module_64ports=1
+ port_flex_enable=1
+ schan_intr_enable=0
+-stable_size=0x5500000 ;Specify the stable cache size in bytes used for Warm boot operations
++stable_size=0x8000000 ;Specify the stable cache size in bytes used for Warm boot operations
+ tdma_timeout_usec=3000000
+ skip_L2_USER_ENTRY=0
+ bcm_tunnel_term_compatible_mode=1
+@@ -485,3 +485,13 @@
+ #phy_chain_rx_polarity_flip_physical{81.0}=0x1
+ #phy_chain_tx_polarity_flip_physical{81.0}=0x1
+ 
++# VXLAN settings from Edgecore's Accton-AS5835-54X configuration.
++l3_ecmp_levels=2
++use_all_splithorizon_groups=1
++riot_enable=1
++sai_tunnel_support=1
++riot_overlay_l3_intf_mem_size=4096
++riot_overlay_l3_egress_mem_size=8192
++riot_overlay_ecmp_resilient_hash_size=16384
++flow_init_mode=1
++host_as_route_disable=1
+--- a/device/accton/x86_64-accton_as7726_32x-r0/Accton-AS7726-32X/td3-as7726-32x100G.config.bcm
++++ b/device/accton/x86_64-accton_as7726_32x-r0/Accton-AS7726-32X/td3-as7726-32x100G.config.bcm
+@@ -1,4 +1,4 @@
+-sai_load_hw_config=/etc/bcm/flex/bcm56870_a0_premium_issu/b870.6.4.1/
++sai_load_hw_config=/etc/bcm/flex/bcm56870_a0_premium_issu/default/
+ #polarity/lanemap is using TH2 style.
+ core_clock_frequency=1525
+ dpp_clock_ratio=2:3
+@@ -29,7 +29,7 @@
+ module_64ports=1
+ port_flex_enable=1
+ schan_intr_enable=0
+-stable_size=0x5500000
++stable_size=0x8000000
+ tdma_timeout_usec=3000000
+ skip_L2_USER_ENTRY=0
+ bcm_tunnel_term_compatible_mode=1
+@@ -492,3 +492,14 @@
+ phy_chain_tx_polarity_flip_physical{126.0}=0x1
+ phy_chain_tx_polarity_flip_physical{127.0}=0x0
+ phy_chain_tx_polarity_flip_physical{128.0}=0x0
++
++# VXLAN settings from Edgecore's Accton-AS7726-32X configuration.
++l3_ecmp_levels=2
++use_all_splithorizon_groups=1
++riot_enable=1
++sai_tunnel_support=1
++riot_overlay_l3_intf_mem_size=4096
++riot_overlay_l3_egress_mem_size=32768
++riot_overlay_ecmp_resilient_hash_size=16384
++flow_init_mode=1
++host_as_route_disable=1

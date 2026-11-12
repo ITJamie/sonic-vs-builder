@@ -104,3 +104,26 @@ are recorded under `compatibility_fixes`.
   upstream common profile or change aliases, lanes, MMU or other vendor settings.
   Integration checks exact changes and reapplication; VXLAN forwarding and
   resource headroom on SAI 15.2 still require hardware testing.
+- `202605/0006-fix-edgecore-pddf-health-leds.patch`: restore the health/status LED
+  interface for PDDF AS7326, AS7726 and AS7816, with matching driver color labels
+  and AS7726 health config. Preserve AS5835's native implementation.
+- `202605/0007-port-edgecore-sdk-settings.patch`: extend stable-cache and exact
+  vendor VXLAN settings to AS5835 and AS7726, preserving their distinct resource
+  allocations. AS7726 also uses the SDK's Cancun `default/` path. AS7816's
+  Tomahawk2 profile stays intact.
+- `202605/0008-fix-edgecore-linux-watchdog.patch`: add/fix hardware-watchdog
+  adapters for all four families, using a common Linux implementation whose
+  queries do not open/arm hardware. Fix the PDDF missing `syslog` import.
+- `202605/0009-recover-edgecore-thermal-monitor.patch`: use full fan speed while
+  sensor readings are unavailable, retry and recover the existing thermal policy,
+  and restart unexpected monitor failures. Preserve native AS5835 and PDDF mode
+  selection; correct AS7726 airflow comparison without changing thresholds.
+- `202605/0010-order-edgecore-idt-before-pddf.patch`: order AS7326 and AS7726
+  IDT clock initialization before PDDF binds their muxes, following upstream
+  [PR #30498](https://github.com/sonic-net/sonic-buildimage/pull/30498).
+
+The four-family support matrix, exact scope, source pins and required hardware
+checks are in [Edgecore platform support](../docs/edgecore-platform-support.md).
+The CI regression applies/reapplies all patches to pinned upstream and executes
+the actual patched methods with simulated sensors and watchdog devices. These
+software checks do not establish hardware validation for untested models.

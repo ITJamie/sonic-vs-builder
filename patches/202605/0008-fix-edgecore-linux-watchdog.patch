@@ -1,0 +1,216 @@
+Subject: [202605] Wire Edgecore hardware watchdogs without query side effects
+
+Add adapters for the native AS5835 API and PDDF AS7326/AS7726/AS7816.
+Use the common platform package (already required by all four APIs),
+rather than forcing native AS5835 into PDDF mode. Fix the missing syslog
+import exposed by missing platform adapters in PR #25049.
+Avoid the existing generic PDDF watchdog constructor: it opens/arms and
+disables hardware even for status, and an already inactive disarm fails.
+The new adapter discovers supported identities through sysfs, uses
+four-byte ioctl arguments and the driver-returned timeout, reads kernel
+state across processes, and treats repeated disarm as success. Explicit
+arm/disarm still require controlled hardware validation per model.
+References: https://github.com/sonic-net/sonic-buildimage/pull/25049
+https://docs.kernel.org/watchdog/watchdog-api.html
+
+Verified source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Remove individual fixes when upstream supplies equivalent behavior.
+Software regressions cover these changes; only AS7326 has been
+inspected live. Other models require installation/hardware validation.
+
+--- a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
++++ b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
+@@ -252,3 +252,10 @@
+         else:
+             return self._api_helper.write_txt_file(SYSLED_FNODE, mode)
+             
++
++
++    def get_watchdog(self):
++        if self._watchdog is None:
++            from sonic_platform.watchdog import Watchdog
++            self._watchdog = Watchdog()
++        return self._watchdog
+--- /dev/null
++++ b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/watchdog.py
+@@ -0,0 +1,7 @@
++"""Edgecore Linux hardware watchdog adapter (not the fan-controller WDT)."""
++
++from sonic_platform_base.linux_watchdog import LinuxWatchdog
++
++
++class Watchdog(LinuxWatchdog):
++    pass
+--- /dev/null
++++ b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/watchdog.py
+@@ -0,0 +1,7 @@
++"""Edgecore Linux hardware watchdog adapter (not the fan-controller WDT)."""
++
++from sonic_platform_base.linux_watchdog import LinuxWatchdog
++
++
++class Watchdog(LinuxWatchdog):
++    pass
+--- a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/watchdog.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/watchdog.py
+@@ -7,17 +7,17 @@
+ #############################################################################
+ 
+ try:
+-    from sonic_platform_pddf_base.pddf_watchdog import PddfWatchdog
++    from sonic_platform_base.linux_watchdog import LinuxWatchdog
+ except ImportError as e:
+     raise ImportError(str(e) + "- required module not found")
+ 
+-class Watchdog(PddfWatchdog):
++class Watchdog(LinuxWatchdog):
+     """
+     PDDF Platform-specific Chassis class
+     """
+ 
+     def __init__(self):
+-        PddfWatchdog.__init__(self)
++        LinuxWatchdog.__init__(self)
+         self.timeout= 180
+ 
+     # Provide the functions/variables below for which implementation is to be overwritten
+--- /dev/null
++++ b/platform/broadcom/sonic-platform-modules-accton/as7816-64x/sonic_platform/watchdog.py
+@@ -0,0 +1,7 @@
++"""Edgecore Linux hardware watchdog adapter (not the fan-controller WDT)."""
++
++from sonic_platform_base.linux_watchdog import LinuxWatchdog
++
++
++class Watchdog(LinuxWatchdog):
++    pass
+--- a/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_chassis.py
++++ b/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_chassis.py
+@@ -7,6 +7,7 @@
+ 
+ try:
+     import sys
++    import syslog
+     from sonic_platform_base.chassis_base import ChassisBase
+     from sonic_platform.sfp import Sfp
+     from sonic_platform.psu import Psu
+--- /dev/null
++++ b/src/sonic-platform-common/sonic_platform_base/linux_watchdog.py
+@@ -0,0 +1,106 @@
++"""Linux watchdog API for Edgecore platforms using iTCO/wdat watchdogs.
++
++Discovery and status reads never open /dev/watchdog: opening it arms hardware.
++Only explicit arm/disarm operations take ownership of the character device.
++"""
++
++import array
++import fcntl
++import os
++from pathlib import Path
++
++from sonic_platform_base.watchdog_base import WatchdogBase
++
++
++class LinuxWatchdog(WatchdogBase):
++    SYSFS = Path("/sys/class/watchdog")
++    IDENTITIES = frozenset(("iTCO_wdt", "wdat_wdt"))
++    WDIOC_SETOPTIONS = 0x80045704
++    WDIOC_KEEPALIVE = 0x80045705
++    WDIOC_SETTIMEOUT = 0xC0045706
++    WDIOS_DISABLECARD = 1
++
++    def __init__(self):
++        self._fd = None
++        for device in sorted(self.SYSFS.glob("watchdog[0-9]*")):
++            try:
++                identity = (device / "identity").read_text().strip()
++            except OSError:
++                continue
++            if identity in self.IDENTITIES:
++                self._device = device
++                self._path = "/dev/" + device.name
++                break
++        else:
++            raise RuntimeError("No supported Linux hardware watchdog found")
++
++    def _open(self):
++        if self._fd is None:
++            self._fd = os.open(self._path, os.O_RDWR | os.O_CLOEXEC)
++        return self._fd
++
++    def _close(self):
++        if self._fd is not None:
++            fd, self._fd = self._fd, None
++            os.close(fd)
++
++    def is_armed(self):
++        # Kernel state survives short-lived watchdogutil CLI processes.
++        # A missing state must not be treated as safely disarmed.
++        state = (self._device / "state").read_text().strip()
++        if state not in ("active", "inactive"):
++            raise RuntimeError("Unknown hardware watchdog state: " + state)
++        return state == "active"
++
++    def arm(self, seconds):
++        if type(seconds) is not int or not 0 < seconds <= 0x7FFFFFFF:
++            return -1
++        try:
++            fd = self._open()
++            timeout = array.array("i", [seconds])
++            fcntl.ioctl(fd, self.WDIOC_SETTIMEOUT, timeout, True)
++            if timeout[0] < seconds:
++                # SONiC promises the next greater supported timeout, never less.
++                raise ValueError("Driver returned a shorter watchdog timeout")
++            fcntl.ioctl(fd, self.WDIOC_KEEPALIVE, 0)
++            return timeout[0]
++        except (OSError, ValueError):
++            # Opening may already have armed hardware. Attempt to disable it
++            # before returning an error; do not falsely report successful arm.
++            if self._fd is not None:
++                try:
++                    self.disarm()
++                except (OSError, RuntimeError):
++                    pass
++            return -1
++
++    def disarm(self):
++        try:
++            if self._fd is None and not self.is_armed():
++                return True
++            options = array.array("i", [self.WDIOS_DISABLECARD])
++            fcntl.ioctl(self._open(), self.WDIOC_SETOPTIONS, options, True)
++            # Do not report success when nowayout or a driver prevents disable.
++            if self.is_armed():
++                return False
++            self._close()
++            return True
++        except (OSError, RuntimeError):
++            return False
++
++    def get_remaining_time(self):
++        try:
++            if not self.is_armed():
++                return -1
++            # timeleft is optional. Reading sysfs avoids arming it for a query.
++            return int((self._device / "timeleft").read_text().strip())
++        except (OSError, ValueError, RuntimeError):
++            return -1
++
++    def __del__(self):
++        # Deliberately no magic-close 'V': an explicit arm must survive the CLI
++        # process exiting. An explicit disarm uses SETOPTIONS above.
++        try:
++            self._close()
++        except OSError:
++            pass
+--- a/src/sonic-platform-common/sonic_platform_base/watchdog_base.py
++++ b/src/sonic-platform-common/sonic_platform_base/watchdog_base.py
+@@ -3,6 +3,8 @@
+ 
+     Abstract base class for implementing a platform-specific class with which
+     to interact with a hardware watchdog module in SONiC
++
++    For Linux iTCO/wdat devices, see linux_watchdog.LinuxWatchdog.
+ """
+ 
+ 

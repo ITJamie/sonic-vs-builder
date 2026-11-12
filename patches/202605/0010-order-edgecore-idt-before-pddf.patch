@@ -1,0 +1,37 @@
+Subject: [202605] Initialize AS7326 and AS7726 IDT clocks before binding PDDF muxes
+
+Backport the AS7326 ordering fix from PR #30498 and apply the same
+ordering to AS7726, whose equivalent IDT init script directly opens its
+mux addresses before PDDF takes ownership (0x76 rather than 0x70). No forced I2C writes,
+clock register changes or AS5835/AS7816 ordering changes are introduced.
+Reference: https://github.com/sonic-net/sonic-buildimage/pull/30498
+
+Verified source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Remove individual fixes when upstream supplies equivalent behavior.
+Software regressions cover these changes; only AS7326 has been
+inspected live. Other models require installation/hardware validation.
+
+--- a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/service/as7326-platform-handle_mac.service
++++ b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/service/as7326-platform-handle_mac.service
+@@ -1,7 +1,8 @@
+ [Unit]
+ Description=Accton AS7326-56X Platform MAC handle service
+-Before=opennsl-modules.service
++Before=opennsl-modules.service pddf-platform-init.service
+ After=local-fs.target
++DefaultDependencies=no
+ 
+ [Service]
+ Type=oneshot
+--- a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/service/as7726-32x-platform-handle_mac.service
++++ b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/service/as7726-32x-platform-handle_mac.service
+@@ -1,7 +1,8 @@
+ [Unit]
+ Description=Accton AS7726-32X Platform MAC handle service
+-Before=opennsl-modules.service
++Before=opennsl-modules.service pddf-platform-init.service
+ After=local-fs.target
++DefaultDependencies=no
+ 
+ [Service]
+ Type=oneshot

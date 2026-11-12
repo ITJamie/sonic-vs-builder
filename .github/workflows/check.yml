@@ -28,6 +28,11 @@ jobs:
         run: python3 tests/rsync_cleanup_integration.py
       - name: Branch patches and upstream Python dependency regression
         run: python3 tests/branch_patches_integration.py
+      - name: Edgecore SDK and platform health regression
+        run: |
+          docker run --rm --mount "type=bind,source=$PWD,target=/repo,readonly" \
+            --workdir /repo python:3.13-slim-trixie \
+            sh -ec 'apt-get update -qq && apt-get install -y --no-install-recommends git ca-certificates >/dev/null && python tests/edgecore_platform_integration.py'
       - name: Native image and release naming across supported branches
         run: |
           python3 -m venv "$RUNNER_TEMP/image-version-venv"

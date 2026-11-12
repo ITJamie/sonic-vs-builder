@@ -1,0 +1,206 @@
+Subject: [202605] Restore Edgecore PDDF health and LED APIs
+
+Port the minimal chassis LED methods and matching lowercase LED labels
+from Edgecore AS7326/AS7726 (d39662e996c0e8748c9b96ad88dc5f5f524e8048),
+also repairing the same PDDF gap on AS7816. AS5835 uses a native API
+whose existing LED methods/configuration are retained. Preserve sensor
+inventory, I2C registers, airflow handling and health ignore lists.
+References: https://github.com/sonic-net/sonic-buildimage/pull/13809
+https://github.com/sonic-net/sonic-buildimage/pull/23737
+
+Verified source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Remove individual fixes when upstream supplies equivalent behavior.
+Software regressions cover these changes; only AS7326 has been
+inspected live. Other models require installation/hardware validation.
+
+--- a/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json
++++ b/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json
+@@ -2916,13 +2916,13 @@
+         {
+             "attr_list":
+             [
+-                {"attr_name":"STATUS_LED_COLOR_BLUE_BLINK", "descr": "" , "bits" : "5:0",  "value" : "0x27", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
+-                {"attr_name":"STATUS_LED_COLOR_GREEN_BLINK", "descr": "" , "bits" : "5:0",  "value" : "0x17", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
+-                {"attr_name":"STATUS_LED_COLOR_AMBER_BLINK", "descr": "" , "bits" : "5:0",  "value" : "0xf", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
+-                {"attr_name":"STATUS_LED_COLOR_BLUE", "descr": "" , "bits" : "5:0",  "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
+-                {"attr_name":"STATUS_LED_COLOR_GREEN", "descr": "" , "bits" : "5:0",  "value" : "0x5", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
+-                {"attr_name":"STATUS_LED_COLOR_AMBER", "descr": "" , "bits" : "5:0",  "value" : "0x6", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
+-                {"attr_name":"STATUS_LED_COLOR_OFF", "descr": "" , "bits" : "5:0",  "value" : "0xf", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"}
++                {"attr_name":"blue_blink", "descr": "" , "bits" : "5:0",  "value" : "0x27", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
++                {"attr_name":"green_blink", "descr": "" , "bits" : "5:0",  "value" : "0x17", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
++                {"attr_name":"amber_blink", "descr": "" , "bits" : "5:0",  "value" : "0xf", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
++                {"attr_name":"blue", "descr": "" , "bits" : "5:0",  "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
++                {"attr_name":"green", "descr": "" , "bits" : "5:0",  "value" : "0x5", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
++                {"attr_name":"amber", "descr": "" , "bits" : "5:0",  "value" : "0x6", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
++                {"attr_name":"off", "descr": "" , "bits" : "5:0",  "value" : "0xf", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"}
+             ]
+         }
+     },
+@@ -2934,13 +2934,13 @@
+          {
+              "attr_list":
+              [
+-                {"attr_name":"STATUS_LED_COLOR_BLUE_BLINK", "descr": "" , "bits" : "5:0",  "value" : "0x27", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
+-                {"attr_name":"STATUS_LED_COLOR_GREEN_BLINK", "descr": "" , "bits" : "5:0",  "value" : "0x17", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
+-                {"attr_name":"STATUS_LED_COLOR_AMBER_BLINK", "descr": "" , "bits" : "5:0",  "value" : "0xf", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
+-                {"attr_name":"STATUS_LED_COLOR_BLUE", "descr": "" , "bits" : "5:0",  "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
+-                {"attr_name":"STATUS_LED_COLOR_GREEN", "descr": "" , "bits" : "5:0",  "value" : "0x5", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
+-                {"attr_name":"STATUS_LED_COLOR_AMBER", "descr": "" , "bits" : "5:0",  "value" : "0x6", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
+-                {"attr_name":"STATUS_LED_COLOR_OFF", "descr": "" , "bits" : "5:0",  "value" : "0x7", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"}
++                {"attr_name":"blue_blink", "descr": "" , "bits" : "5:0",  "value" : "0x27", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
++                {"attr_name":"green_blink", "descr": "" , "bits" : "5:0",  "value" : "0x17", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
++                {"attr_name":"red_blink", "descr": "" , "bits" : "5:0",  "value" : "0xf", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
++                {"attr_name":"blue", "descr": "" , "bits" : "5:0",  "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
++                {"attr_name":"green", "descr": "" , "bits" : "5:0",  "value" : "0x5", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
++                {"attr_name":"red", "descr": "" , "bits" : "5:0",  "value" : "0x6", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
++                {"attr_name":"off", "descr": "" , "bits" : "5:0",  "value" : "0x7", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"}
+                 
+              ]
+         }
+--- a/device/accton/x86_64-accton_as7326_56x-r0/system_health_monitoring_config.json
++++ b/device/accton/x86_64-accton_as7326_56x-r0/system_health_monitoring_config.json
+@@ -8,8 +8,8 @@
+     "user_defined_checkers": [],
+     "polling_interval": 60,
+     "led_color": {
+-        "fault": "STATUS_LED_COLOR_RED",
+-        "normal": "STATUS_LED_COLOR_GREEN",
+-        "booting": "STATUS_LED_COLOR_GREEN_BLINK"
++        "fault": "red",
++        "normal": "green",
++        "booting": "green_blink"
+     }
+ }
+--- a/device/accton/x86_64-accton_as7726_32x-r0/pddf/pddf-device.json
++++ b/device/accton/x86_64-accton_as7726_32x-r0/pddf/pddf-device.json
+@@ -1894,8 +1894,8 @@
+ 			"i2c" : {
+ 				"attr_list":
+ 				[
+-					{"attr_name":"STATUS_LED_COLOR_BLUE", "descr" : "", "bits" : "7",  "value" : "0x0", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"},
+-					{"attr_name":"STATUS_LED_COLOR_OFF",  "descr" : "", "bits" : "7",  "value" : "0x1", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"}
++					{"attr_name":"blue", "descr" : "", "bits" : "7",  "value" : "0x0", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"},
++					{"attr_name":"off",  "descr" : "", "bits" : "7",  "value" : "0x1", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"}
+ 				]
+ 			}
+ 	},
+@@ -1907,9 +1907,9 @@
+ 			"i2c" : {
+ 				"attr_list":
+ 				[
+-					{"attr_name":"STATUS_LED_COLOR_GREEN", "descr" : "", "bits" : "1:0", "value" : "0x2", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"},
+-					{"attr_name":"STATUS_LED_COLOR_RED",   "descr" : "" ,"bits" : "1:0", "value" : "0x1", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"},
+-					{"attr_name":"STATUS_LED_COLOR_OFF",   "descr" : "" ,"bits" : "1:0", "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"}
++					{"attr_name":"green", "descr" : "", "bits" : "1:0", "value" : "0x2", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"},
++					{"attr_name":"red",   "descr" : "" ,"bits" : "1:0", "value" : "0x1", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"},
++					{"attr_name":"off",   "descr" : "" ,"bits" : "1:0", "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"}
+ 				]
+ 			}
+ 
+--- /dev/null
++++ b/device/accton/x86_64-accton_as7726_32x-r0/system_health_monitoring_config.json
+@@ -0,0 +1,13 @@
++{
++    "services_to_ignore": [],
++    "devices_to_ignore": [
++        "asic"
++    ],
++    "user_defined_checkers": [],
++    "polling_interval": 60,
++    "led_color": {
++        "fault": "red",
++        "normal": "green",
++        "booting": "off"
++    }
++}
+--- a/device/accton/x86_64-accton_as7816_64x-r0/pddf/pddf-device.json
++++ b/device/accton/x86_64-accton_as7816_64x-r0/pddf/pddf-device.json
+@@ -3182,8 +3182,8 @@
+ 			"i2c" : {
+ 				"attr_list":
+ 				[
+-					{"attr_name":"STATUS_LED_COLOR_AMBER", "descr" : "Amber", "bits" : "4",  "value" : "0x0", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x30"},
+-					{"attr_name":"STATUS_LED_COLOR_OFF",  "descr" : "Off", "bits" : "4",  "value" : "0x1", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x30"}
++					{"attr_name":"amber", "descr" : "Amber", "bits" : "4",  "value" : "0x0", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x30"},
++					{"attr_name":"off",  "descr" : "Off", "bits" : "4",  "value" : "0x1", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x30"}
+ 				]
+ 			}
+ 	},
+@@ -3195,9 +3195,9 @@
+ 			"i2c" : {
+ 				"attr_list":
+ 				[
+-					{"attr_name":"STATUS_LED_COLOR_GREEN", "descr" : "Green", "bits" : "1:0", "value" : "0x2", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x30"},
+-					{"attr_name":"STATUS_LED_COLOR_RED",   "descr" : "Red" ,"bits" : "1:0", "value" : "0x1", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x30"},
+-					{"attr_name":"STATUS_LED_COLOR_OFF",   "descr" : "Off" ,"bits" : "1:0", "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x30"}
++					{"attr_name":"green", "descr" : "Green", "bits" : "1:0", "value" : "0x2", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x30"},
++					{"attr_name":"red",   "descr" : "Red" ,"bits" : "1:0", "value" : "0x1", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x30"},
++					{"attr_name":"off",   "descr" : "Off" ,"bits" : "1:0", "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x30"}
+ 				]
+ 			}
+ 
+--- a/device/accton/x86_64-accton_as7816_64x-r0/system_health_monitoring_config.json
++++ b/device/accton/x86_64-accton_as7816_64x-r0/system_health_monitoring_config.json
+@@ -8,8 +8,8 @@
+     "user_defined_checkers": [],
+     "polling_interval": 60,
+     "led_color": {
+-        "fault": "STATUS_LED_COLOR_RED",
+-        "normal": "STATUS_LED_COLOR_GREEN",
+-        "booting": "STATUS_LED_COLOR_GREEN"
++        "fault": "red",
++        "normal": "green",
++        "booting": "green"
+     }
+ }
+--- a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/chassis.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/chassis.py
+@@ -83,3 +83,14 @@
+             sys.stderr.write("SFP index {} out of range (1-{})\n".format(
+                              index, len(self._sfp_list)))
+         return sfp
++
++
++    # Keep the legacy spelling used by show/system_health.py.
++    def initizalize_system_led(self):
++        return True
++
++    def get_status_led(self):
++        return self.get_system_led("DIAG_LED")
++
++    def set_status_led(self, color):
++        return self.set_system_led("DIAG_LED", color)
+--- a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/chassis.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/chassis.py
+@@ -84,3 +84,14 @@
+             sys.stderr.write("SFP index {} out of range (1-{})\n".format(
+                              index, len(self._sfp_list)))
+         return sfp
++
++
++    # Keep the legacy spelling used by show/system_health.py.
++    def initizalize_system_led(self):
++        return True
++
++    def get_status_led(self):
++        return self.get_system_led("DIAG_LED")
++
++    def set_status_led(self, color):
++        return self.set_system_led("DIAG_LED", color)
+--- a/platform/broadcom/sonic-platform-modules-accton/as7816-64x/sonic_platform/chassis.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as7816-64x/sonic_platform/chassis.py
+@@ -84,3 +84,14 @@
+             sys.stderr.write("SFP index {} out of range (1-{})\n".format(
+                              index, len(self._sfp_list)))
+         return sfp
++
++
++    # Keep the legacy spelling used by show/system_health.py.
++    def initizalize_system_led(self):
++        return True
++
++    def get_status_led(self):
++        return self.get_system_led("DIAG_LED")
++
++    def set_status_led(self, color):
++        return self.set_system_led("DIAG_LED", color)

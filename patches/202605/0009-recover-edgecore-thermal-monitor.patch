@@ -1,0 +1,302 @@
+Subject: [202605] Keep Edgecore thermal control alive through missing sensor reads
+
+AS7326 boot logs show None * 1000 killing the fan loop after its initial
+38 percent setting. Apply explicit missing/nonfinite sensor handling to
+AS7326, AS7726 and AS7816 PDDF loops and AS5835 native fan control.
+Keep global fan PWM at 100 percent while a required reading is unavailable,
+retry in the existing loop, then resume each model's existing thermal
+policy. Start PDDF loops at full speed until valid readings are available.
+Restart unexpected service failures instead of leaving control dead.
+AS7726 accepts both vendor uppercase and standard lowercase direction
+strings, retaining its distinct airflow policies; no thresholds change.
+Reference: Edgecore thermal implementations at d39662e9; these still
+have unguarded sensor reads, so this is a local recovery fix.
+
+Verified source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Remove individual fixes when upstream supplies equivalent behavior.
+Software regressions cover these changes; only AS7326 has been
+inspected live. Other models require installation/hardware validation.
+
+--- a/platform/broadcom/sonic-platform-modules-accton/as5835-54x/service/as5835-54x-platform-monitor.service
++++ b/platform/broadcom/sonic-platform-modules-accton/as5835-54x/service/as5835-54x-platform-monitor.service
+@@ -5,6 +5,8 @@
+ DefaultDependencies=no
+ 
+ [Service]
++Restart=on-failure
++RestartSec=5
+ ExecStartPre=/usr/local/bin/accton_as5835_54x_util.py install
+ ExecStart=/usr/local/bin/accton_as5835_54x_monitor.py
+ KillSignal=SIGKILL
+--- a/platform/broadcom/sonic-platform-modules-accton/as5835-54x/utils/accton_as5835_54x_monitor.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as5835-54x/utils/accton_as5835_54x_monitor.py
+@@ -26,6 +26,7 @@
+ try:
+     import getopt
+     import sys
++    import math
+     import logging
+     import logging.config
+     import time  # this is only being used as part of the example
+@@ -91,19 +92,33 @@
+         thermal = ThermalUtil()
+         fan = FanUtil()
+ 
+-        temp2 = thermal.get_thermal_val(2)
+-        if temp2 is None:
++        try:
++            temp2 = thermal.get_thermal_val(2)
++            temp3 = thermal.get_thermal_val(3)
++            valid = all(value is not None and not isinstance(value, bool)
++                        and math.isfinite(float(value)) for value in (temp2, temp3))
++        except (OSError, ValueError, TypeError):
++            valid = False
++        if not valid:
++            fan.set_fan_duty_cycle(DUTY_MAX)
++            self._input_unavailable = True
++            logging.error("Temperature unavailable; keeping fans at 100% and retrying")
+             return False
+ 
+-        temp3 = thermal.get_thermal_val(3)
+-        if temp3 is None:
+-            return False
++        temp2, temp3 = float(temp2), float(temp3)
+ 
+         new_temp = (temp2 + temp3) / 2
++        if getattr(self, "_input_unavailable", False):
++            # Reevaluate the normal policy even when the recovered temperature
++            # equals the last good reading; otherwise full-speed fallback sticks.
++            self._ori_temp = new_temp - 1
++            self._input_unavailable = False
+ 
+         for x in range(fan.get_idx_fan_start(), fan.get_num_fans()+1):
+             fan_stat = fan.get_fan_status(x)
+             if fan_stat is None:
++                fan.set_fan_duty_cycle(DUTY_MAX)
++                self._input_unavailable = True
+                 return False
+             if fan_stat is False:
+                 self._new_perc = FAN_LEV1_SPEED_PERC
+--- a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/service/as7326-56x-pddf-platform-monitor.service
++++ b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/service/as7326-56x-pddf-platform-monitor.service
+@@ -5,6 +5,8 @@
+ DefaultDependencies=no
+ 
+ [Service]
++Restart=on-failure
++RestartSec=5
+ ExecStart=/usr/local/bin/accton_as7326_pddf_monitor.py
+ KillSignal=SIGKILL
+ SuccessExitStatus=SIGKILL
+--- a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/utils/accton_as7326_pddf_monitor.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/utils/accton_as7326_pddf_monitor.py
+@@ -23,6 +23,7 @@
+ 
+ try:
+     import sys
++    import math
+     import getopt
+     import logging
+     import subprocess
+@@ -63,6 +64,19 @@
+ test_temp_revert = 0
+ 
+ # Make a class we can use to capture stdout and sterr in the log
++
++
++
++def read_temperature_milli(index):
++    """Return a finite sensor reading, or None while unavailable."""
++    try:
++        value = platform_chassis.get_thermal(index).get_temperature()
++        if isinstance(value, bool) or value is None:
++            return None
++        value = float(value)
++        return value * 1000 if math.isfinite(value) else None
++    except (OSError, ValueError, TypeError, AttributeError):
++        return None
+ 
+ 
+ class device_monitor(object):
+@@ -147,8 +161,12 @@
+         ori_perc = platform_chassis.get_fan(0).get_speed()
+         #logging.debug('test_temp=%d', test_temp)
+         if test_temp == 0:
+-            temp2 = platform_chassis.get_thermal(1).get_temperature()*1000
+-            temp4 = platform_chassis.get_thermal(3).get_temperature()*1000
++            temp2 = read_temperature_milli(1)
++            temp4 = read_temperature_milli(3)
++            if temp2 is None or temp4 is None:
++                platform_chassis.get_fan(0).set_speed(100)
++                logging.error("Temperature unavailable; keeping fans at 100% and retrying")
++                return False
+         else:
+             temp2 = test_temp_list[0]
+             temp4 = test_temp_list[1]
+@@ -295,9 +313,9 @@
+     global platform_chassis
+     platform_chassis = platform.Platform().get_chassis()
+ 
+-    platform_chassis.get_fan(0).set_speed(38)
+-
+-    print("set default fan speed to 37.5%")
++    platform_chassis.get_fan(0).set_speed(100)
++
++    print("set startup fan speed to 100% until sensors are ready")
+     monitor = device_monitor(log_file, log_level)
+ 
+     while True:
+--- a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/service/as7726-32x-pddf-platform-monitor.service
++++ b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/service/as7726-32x-pddf-platform-monitor.service
+@@ -5,6 +5,8 @@
+ DefaultDependencies=no
+ 
+ [Service]
++Restart=on-failure
++RestartSec=5
+ ExecStart=/usr/local/bin/accton_as7726_32x_pddf_monitor.py
+ KillSignal=SIGKILL
+ SuccessExitStatus=SIGKILL
+--- a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/utils/accton_as7726_32x_pddf_monitor.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/utils/accton_as7726_32x_pddf_monitor.py
+@@ -25,6 +25,7 @@
+ 
+ try:
+     import sys
++    import math
+     import getopt
+     import logging
+     import subprocess
+@@ -60,6 +61,19 @@
+ #  sensor_LM75_CPU == sensor_LM75_4B
+  
+      
++
++def read_temperature_milli(index):
++    """Return a finite sensor reading, or None while unavailable."""
++    try:
++        value = platform_chassis.get_thermal(index).get_temperature()
++        if isinstance(value, bool) or value is None:
++            return None
++        value = float(value)
++        return value * 1000 if math.isfinite(value) else None
++    except (OSError, ValueError, TypeError, AttributeError):
++        return None
++
++
+ class switch(object):
+     def __init__(self, value):
+         self.value = value
+@@ -162,7 +176,12 @@
+         }
+         
+         fan_dir= platform_chassis.get_fan(0).get_direction()
+-        if fan_dir == 'EXHAUST':
++        fan_dir = str(fan_dir).lower()
++        if fan_dir not in ('exhaust', 'intake'):
++            platform_chassis.get_fan(0).set_speed(100)
++            logging.error("Unknown airflow direction; keeping fans at 100%")
++            return False
++        if fan_dir == 'exhaust':
+             fan_policy = fan_policy_f2b
+         else:
+             fan_policy = fan_policy_b2f
+@@ -171,8 +190,12 @@
+         #ori_perc=fan.get_fan_duty_cycle()
+         logging.debug('fan_dir=%s, ori_perc=%d, test_temp=%d', fan_dir, ori_perc, test_temp)
+         if test_temp==0:
+-            temp4 = platform_chassis.get_thermal(3).get_temperature()*1000
+-            temp5 = platform_chassis.get_thermal(4).get_temperature()*1000
++            temp4 = read_temperature_milli(3)
++            temp5 = read_temperature_milli(4)
++            if temp4 is None or temp5 is None:
++                platform_chassis.get_fan(0).set_speed(100)
++                logging.error("Temperature unavailable; keeping fans at 100% and retrying")
++                return False
+         else:
+             temp4 = test_temp_list[3]
+             temp5 = test_temp_list[4]            
+@@ -306,9 +329,9 @@
+     global platform_chassis
+     platform_chassis = platform.Platform().get_chassis()
+     
+-    platform_chassis.get_fan(0).set_speed(38)
++    platform_chassis.get_fan(0).set_speed(100)
+   
+-    print("set default fan speed to 37.5%")
++    print("set startup fan speed to 100% until sensors are ready")
+     monitor = device_monitor(log_file, log_level)
+     # Loop forever, doing something useful hopefully:
+     while True:
+--- a/platform/broadcom/sonic-platform-modules-accton/as7816-64x/service/as7816-pddf-platform-monitor.service
++++ b/platform/broadcom/sonic-platform-modules-accton/as7816-64x/service/as7816-pddf-platform-monitor.service
+@@ -5,6 +5,8 @@
+ DefaultDependencies=no
+ 
+ [Service]
++Restart=on-failure
++RestartSec=5
+ ExecStart=/usr/local/bin/accton_as7816_pddf_monitor.py
+ KillSignal=SIGKILL
+ SuccessExitStatus=SIGKILL
+--- a/platform/broadcom/sonic-platform-modules-accton/as7816-64x/utils/accton_as7816_pddf_monitor.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as7816-64x/utils/accton_as7816_pddf_monitor.py
+@@ -25,6 +25,7 @@
+ try:
+     import subprocess
+     import sys
++    import math
+     import getopt
+     import logging
+     import logging.config
+@@ -48,6 +49,19 @@
+ temp_test_data = 0
+ 
+ 
++
++def read_temperature_milli(index):
++    """Return a finite sensor reading, or None while unavailable."""
++    try:
++        value = platform_chassis.get_thermal(index).get_temperature()
++        if isinstance(value, bool) or value is None:
++            return None
++        value = float(value)
++        return value * 1000 if math.isfinite(value) else None
++    except (OSError, ValueError, TypeError, AttributeError):
++        return None
++
++
+ def get_thermal_avg_temp():
+     global platform_chassis
+     global test_temp_list
+@@ -58,7 +72,10 @@
+ 
+     if test_temp == 0:
+         for x in range(THERMAL_NUM_ON_MAIN_BROAD):
+-            sum_temp = sum_temp + platform_chassis.get_thermal(x).get_temperature()*1000
++            value = read_temperature_milli(x)
++            if value is None:
++                return None
++            sum_temp = sum_temp + value
+ 
+     else:
+         for x in range(THERMAL_NUM_ON_MAIN_BROAD):
+@@ -141,6 +158,10 @@
+ 
+         # Decide fan duty by if avg of sensors falls into any of fan_policy{}
+         get_temp = get_thermal_avg_temp()
++        if get_temp is None:
++            platform_chassis.get_fan(0).set_speed(DUTY_MAX)
++            logging.error("Temperature unavailable; keeping fans at 100% and retrying")
++            return False
+ 
+         for x in range(0, len(fan_policy)):
+             y = len(fan_policy) - x - 1  # checked from highest
+@@ -192,6 +213,7 @@
+ 
+     global platform_chassis
+     platform_chassis = platform.Platform().get_chassis()
++    platform_chassis.get_fan(0).set_speed(DUTY_MAX)
+     status, output = subprocess.getstatusoutput('i2cset -f -y 17 0x68 0x28 0x0')
+     if status:
+         print("Warning: Fan speed watchdog could not be disabled")

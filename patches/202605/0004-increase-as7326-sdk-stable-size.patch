@@ -1,0 +1,26 @@
+Subject: [202605] Increase AS7326 Broadcom SDK stable storage
+
+Backport the AS7326-56X configuration change from upstream PR #22641.
+Increase stable_size from 85 MiB to 88 MiB for the newer Broadcom SDK.
+Keep this scoped to AS7326; do not change other platforms or SDK binaries.
+
+Upstream issue: https://github.com/sonic-net/sonic-buildimage/issues/21295
+Upstream fix: https://github.com/sonic-net/sonic-buildimage/pull/22641
+Verified source: de9703231aa99a5173f37825a1b120aa602f1a26.
+Remove when upstream includes this setting or a replacement SDK configuration.
+
+Limitation: a manual test with this value on our 202605 AS7326 still returned
+"init bcm" failure with SDK 6.5.35-SP1 / SAI 15.2.1.0.0.0.50.1. This backports
+the known platform workaround; it is not a verified fix for that newer failure.
+
+--- a/device/accton/x86_64-accton_as7326_56x-r0/Accton-AS7326-56X/td3-as7326-48x25G+8x100G.config.bcm
++++ b/device/accton/x86_64-accton_as7326_56x-r0/Accton-AS7326-56X/td3-as7326-48x25G+8x100G.config.bcm
+@@ -28,7 +28,7 @@
+ module_64ports=1
+ port_flex_enable=1
+ schan_intr_enable=0
+-stable_size=0x5500000
++stable_size=0x5800000
+ tdma_timeout_usec=3000000
+ skip_L2_USER_ENTRY=0
+ bcm_tunnel_term_compatible_mode=1

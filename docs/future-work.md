@@ -1,5 +1,15 @@
 # Future work
 
+## Review Broadcom SAI compatibility on AS7326
+
+See [Broadcom SAI versions and AS7326 investigation](broadcom-sai-investigation.md)
+for the release/container comparison, upstream regression references, unsuccessful
+manual workarounds, and proposed 202505/202311 comparison tests. Direct SDK
+testing subsequently identified stable-cache exhaustion: 128 MiB enabled normal
+initialization on the test switch. The build patch now includes that allocation
+and the tested firmware path; reboot, forwarding and platform-health validation
+remain outstanding.
+
 ## Give built images a recognisable version name
 
 Requested: use a clear build identity in future images instead of an automatically

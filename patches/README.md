@@ -85,10 +85,13 @@ are recorded under `compatibility_fixes`.
   macros in build containers so Trixie's Bash package can compile its PDF docs.
   Runtime image cleanup remains enabled. CI reproduces the original failure and
   checks PostScript/PDF generation under fakeroot after the patched cleanup.
-- `202605/0004-increase-as7326-sdk-stable-size.patch`: backport the AS7326-56X
-  `stable_size` increase from `0x5500000` to `0x5800000` in upstream
+- `202605/0004-increase-as7326-sdk-stable-size.patch`: increase AS7326-56X
+  `stable_size` to 128 MiB (`0x8000000`) and select the SDK-provided Cancun
+  `default/` firmware path. The older 88 MiB workaround from
   [PR #22641](https://github.com/sonic-net/sonic-buildimage/pull/22641), linked from
-  [issue #21295](https://github.com/sonic-net/sonic-buildimage/issues/21295).
-  A manual test on our 202605 switch still failed SDK initialization, so this is
-  a known workaround included for further testing, not a confirmed resolution.
-  Patch integration checks application, exact configuration change and reapplication.
+  [issue #21295](https://github.com/sonic-net/sonic-buildimage/issues/21295), still
+  exhausted scache with SDK 6.5.35-SP1. Direct SDK initialization and normal
+  syncd/SWSS startup succeeded on our BCM56873 test switch at 128 MiB, exposing
+  all 56 front-panel ports. Forwarding and reboot validation remain outstanding.
+  Patch integration checks application, both exact configuration changes and
+  reapplication. See [the investigation](../docs/broadcom-sai-investigation.md).

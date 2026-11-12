@@ -41,7 +41,12 @@ with tempfile.TemporaryDirectory() as directory:
     subprocess.run(["git", "init", "-q", str(source)], check=True)
     result = apply_branch_patches(source, work, "202605")
     assert len(result) == 4 and all(item["status"] == "applied" for item in result)
-    assert sdk.read_text() == sdk_original.replace("stable_size=0x5500000\n", "stable_size=0x5800000\n")
+    assert sdk.read_text() == sdk_original.replace(
+        "stable_size=0x5500000\n", "stable_size=0x8000000\n"
+    ).replace(
+        "sai_load_hw_config=/etc/bcm/flex/bcm56870_a0_premium_issu/b870.6.4.1/\n",
+        "sai_load_hw_config=/etc/bcm/flex/bcm56870_a0_premium_issu/default/\n",
+    )
     assert template.read_text().index("RUN apt-get remove -y python3-pycparser") < template.read_text().index("# Install locally-built Python wheel dependencies")
     assert target.read_text() == original.replace("wcwidth==0.7.0\n", "wcwidth==0.9.2\n")
     assert all(item["status"] == "already-applied" for item in apply_branch_patches(source, work, "202605"))

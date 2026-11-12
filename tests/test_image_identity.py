@@ -1,6 +1,9 @@
 import os
+import json
 from pathlib import Path
 import sys
+import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -125,10 +128,42 @@ class ImageIdentity(unittest.TestCase):
     def test_workflow_shares_allocated_identity_across_every_platform(self):
         workflow = (Path(__file__).parents[1] / ".github/workflows/build.yml").read_text()
         for text in ("matrix: ${{ steps.identity.outputs.matrix }}", "RELEASE_TAG: ${{ matrix.release_tag }}",
-                     "SONIC_IMAGE_VERSION: ${{ matrix.image_version }}", "BUILD_LABEL: ${{ matrix.build_label }}",
+                     'output.write(f"SONIC_IMAGE_VERSION={version}\\n")', "BUILD_LABEL: ${{ matrix.build_label }}",
                      '["run_started_at"]', "actions: read"):
             self.assertIn(text, workflow)
         self.assertNotIn("RELEASE_TAG: sonic-${{ matrix.branch }}-${{ github.run_id }}", workflow)
+
+    def test_actual_workflow_output_avoids_masked_username_and_rebuilds_exact_version(self):
+        workflow = (Path(__file__).parents[1] / ".github/workflows/build.yml").read_text()
+        scripts = [textwrap.dedent(block.split("          PY", 1)[0])
+                   for block in workflow.split("python3 - <<'PY'\n")[1:]]
+        self.assertEqual(len(scripts), 2)
+        # Execute the actual Actions Python blocks, including the job-output
+        # boundary where the runner suppresses values containing a secret.
+        for ztp in (False, True):
+            identity = {**ENTRY, "build_label": "20261112-22-2", "release_tag": BASE + "-2",
+                        "image_version": builder.version_name("202605", "20261112-22-2", ztp),
+                        "build_started_at": START}
+            with self.subTest(ztp=ztp), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "output"
+                environment = Path(directory) / "env"
+                values = {"MATRIX": json.dumps({"include": [ENTRY]}), "REPOSITORY": REPO,
+                          "BUILDER_COMMIT": "b" * 40, "GITHUB_RUN_ID": "12345",
+                          "GITHUB_RUN_ATTEMPT": "1", "ENABLE_ZTP": str(ztp).lower(),
+                          "GITHUB_OUTPUT": str(output), "GITHUB_ENV": str(environment)}
+                with patch.dict(os.environ, values), \
+                        patch.object(releases, "api", return_value={"run_started_at": START}), \
+                        patch.object(releases, "reserve_build", return_value=dict(identity)):
+                    exec(compile(scripts[0], "prepare-workflow", "exec"), {})
+                    exported = output.read_text().removeprefix("matrix=").strip()
+                    self.assertNotIn("itjamie", exported.lower())
+                    entry = json.loads(exported)["include"][0]
+                    self.assertEqual(entry["release_tag"], identity["release_tag"])
+                    with patch.dict(os.environ, {"BRANCH": entry["branch"],
+                                                 "BUILD_LABEL": entry["build_label"]}):
+                        exec(compile(scripts[1], "build-workflow", "exec"), {})
+                    self.assertEqual(environment.read_text(),
+                                     f"SONIC_IMAGE_VERSION={identity['image_version']}\n")
 
 
 if __name__ == "__main__":

@@ -56,7 +56,8 @@ class ZTP(unittest.TestCase):
     def test_workflow_forwards_dispatch_input_to_every_build(self):
         workflow = (ROOT / ".github/workflows/build.yml").read_text()
         self.assertIn("      enable_ztp:\n", workflow)
-        self.assertEqual(workflow.count('ENABLE_ZTP: ${{ inputs.enable_ztp }}'), 4)
+        # Preparation, native version reconstruction, and all three builds.
+        self.assertEqual(workflow.count('ENABLE_ZTP: ${{ inputs.enable_ztp }}'), 5)
         self.assertEqual(workflow.count('--enable-ztp "$ENABLE_ZTP"'), 3)
 
 

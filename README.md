@@ -198,3 +198,5 @@ The token needs repository Contents write access and visibility of drafts.
 can be scheduled daily through cron or a separate maintenance workflow. No
 schedule is installed automatically. GitHub's automatic source-code archives do
 not count as attached assets; this script does not manage GHCR packages.
+
+Future build improvements are tracked in [docs/future-work.md](docs/future-work.md).

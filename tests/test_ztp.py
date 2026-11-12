@@ -35,21 +35,28 @@ class ZTP(unittest.TestCase):
                             patch.object(builder, "apply_branch_patches", return_value=[]), \
                             patch.object(builder, "archive_image", return_value="sha256:" + "b" * 64), \
                             patch.object(builder, "load_untagged", return_value="sha256:" + "c" * 64), \
-                            patch.object(builder, "smoke", return_value=[]), \
+                            patch.object(builder, "smoke", return_value=[]) as smoke, \
                             patch.object(builder, "run", side_effect=command) as run:
-                        builder.build(work, "202505", "a" * 40, 3, platform, enable_ztp=enabled)
+                        version = "202505-itjamie.20261112-22" + ("-ztp" if enabled else "")
+                        builder.build(work, "202505", "a" * 40, 3, platform, enable_ztp=enabled,
+                                      image_version=version)
                     calls = [call.args for call in run.call_args_list if call.args[0] == "make"]
                     flag = "ENABLE_ZTP=y" if enabled else "ENABLE_ZTP=n"
                     for call in calls:
                         if "configure" in call or f"target/{filename}" in call:
                             self.assertIn(flag, call)
+                            self.assertIn(f"SONIC_IMAGE_VERSION={version}", call)
                     metadata = json.loads((work / "validated.json").read_text())
                     self.assertIs(metadata["enable_ztp"], enabled)
+                    self.assertEqual(metadata["image_version"], version)
+                    if platform == "vs":
+                        smoke.assert_called_once_with(
+                            "sha256:" + "c" * 64, require_rsync=False, expected_version=version)
 
     def test_workflow_forwards_dispatch_input_to_every_build(self):
         workflow = (ROOT / ".github/workflows/build.yml").read_text()
         self.assertIn("      enable_ztp:\n", workflow)
-        self.assertEqual(workflow.count('ENABLE_ZTP: ${{ inputs.enable_ztp }}'), 3)
+        self.assertEqual(workflow.count('ENABLE_ZTP: ${{ inputs.enable_ztp }}'), 4)
         self.assertEqual(workflow.count('--enable-ztp "$ENABLE_ZTP"'), 3)
 
 

@@ -50,6 +50,27 @@ Package caches remain separated by branch, with upstream dependency checks
 controlling reuse. Registry tags still use the branch name, so rebuilding with a
 different setting replaces that branch's VS tag; release downloads remain per build.
 
+Image versions use the pipeline attempt's start date/hour in **UTC**, for example
+`202605-itjamie.20261112-22`, with `-ztp` appended when enabled. All selected
+outputs share the same identity. The installer/GRUB name becomes
+`SONiC-OS-202605-itjamie.20261112-22`; `show version` reports the corresponding
+build version. Releases use titles such as `SONiC 202605 — 20261112-22` and tags
+such as `sonic-202605-20261112-22`. A second build of the same branch in that hour
+gets a short `-2`, then `-3`, suffix; existing tags/assets are never overwritten.
+Reruns reserve a new identity unless preparation is retried within the same
+run attempt and its own draft already exists. Original run IDs, attempt numbers,
+the precise start timestamp, upstream/builder SHAs and patch records remain in
+metadata and release notes. Existing releases retain their original names/URLs.
+Local CLI builds without an explicit `--image-version` use the current UTC
+date/hour; automatic collision reservation is provided by workflow preparation.
+
+The native `SONIC_IMAGE_VERSION` override is supplied during configuration and
+image compilation. Older VS version rules are bound to that same variable, and
+VS smoke checks reject a container reporting a different version. Source-level
+integration checks cover naming through native Make/YAML and installer/GRUB paths
+on all seven supported release branches; hardware boot verification remains a
+separate check after installing an image.
+
 Each platform uses a fresh checkout of the same resolved upstream commit, then runs `make init`, `make configure PLATFORM=<vs|broadcom> PLATFORM_ARCH=amd64`, and `make SONIC_BUILD_JOBS=<jobs> <target>` with `UNATTENDED=y`. Targets are `target/docker-sonic-vs.gz`, `target/sonic-vs.img.gz`, and `target/sonic-broadcom.bin`. The KVM stage configures upstream `PLATFORM=vs`, just like the Docker stage. Upstream tests remain enabled; the ZTP option is set explicitly as described above. The Broadcom target uses upstream's dependency selection, which can also build components for related Broadcom variants; this workflow uploads only the requested installer. Other historical branches may need a different upstream environment; compatibility is established by successful builds, not guaranteed for every release.
 
 Branch-specific fixes live in [`patches/<upstream-branch>/`](patches/README.md). Numbered `*.patch` files apply in order after submodule initialization and before configuration, for all selected outputs and with either cache mode. A patch mismatch stops the build; an already-present fix is recorded rather than applied again. Logs/artifacts retain `patches.json`, and successful image metadata includes patch paths, hashes and statuses. Patch identities refresh cached build/runtime images when fixes change. The first patch corrects the incompatible `blessed`/`wcwidth` build constraints on `202605`, tracked in [upstream issue #30604](https://github.com/sonic-net/sonic-buildimage/issues/30604).

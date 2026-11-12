@@ -28,6 +28,11 @@ jobs:
         run: python3 tests/rsync_cleanup_integration.py
       - name: Branch patches and upstream Python dependency regression
         run: python3 tests/branch_patches_integration.py
+      - name: Native image and release naming across supported branches
+        run: |
+          python3 -m venv "$RUNNER_TEMP/image-version-venv"
+          "$RUNNER_TEMP/image-version-venv/bin/python" -m pip install Jinja2==3.1.6
+          "$RUNNER_TEMP/image-version-venv/bin/python" tests/image_version_integration.py
       - name: 202505 legacy builder skip and Docker dependency regression
         run: python3 tests/legacy_builder_skip_integration.py
       - name: Sairedis generated binding compiler warning regression

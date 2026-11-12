@@ -3,6 +3,7 @@
 
 import argparse
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import fcntl
 import gzip
 import hashlib
@@ -10,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -23,6 +25,41 @@ SHA = re.compile(r"[0-9a-f]{40}\Z")
 MARKER = ".sonic-vs-builder"
 TARGETS = {"vs": "docker-sonic-vs.gz", "kvm": "sonic-vs.img.gz", "broadcom": "sonic-broadcom.bin"}
 PATCHES = Path(__file__).resolve().parents[1] / "patches"
+
+
+def date_label(started_at):
+    started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    if started.tzinfo is None:
+        raise ValueError("Build start time must include a timezone")
+    return started.astimezone(timezone.utc).strftime("%Y%m%d-%H")
+
+
+def validate_version(value):
+    # Versions become Docker tags, installer directory names and GRUB labels.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", value, re.ASCII):
+        raise ValueError("Image version must be 1-128 safe tag/path characters")
+    return value
+
+
+def version_name(branch, label, enable_ztp=False):
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{2}(?:-[2-9]|-[1-9][0-9]+)?", label):
+        raise ValueError("Expected a UTC date/hour label with an optional collision suffix")
+    datetime.strptime(label[:11], "%Y%m%d-%H")
+    return validate_version(f"{branch}-itjamie.{label}" + ("-ztp" if enable_ztp else ""))
+
+
+def fix_vs_image_version(source):
+    # Older VS rules use SONIC_GET_VERSION instead of the native image override.
+    path = source / "platform/vs/sonic-version.mk"
+    if not path.is_file():
+        return []
+    original = path.read_text()
+    updated = original.replace("sonic_version=$(SONIC_GET_VERSION)",
+                               "sonic_version=$(SONIC_IMAGE_VERSION)")
+    if updated == original:
+        return []
+    path.write_text(updated)
+    return ["vs-native-image-version"]
 
 
 def maintenance_root(directory=None, work=None):
@@ -503,7 +540,7 @@ def load_untagged(archive):
         output.close()
 
 
-def smoke(image, require_rsync=True):
+def smoke(image, require_rsync=True, expected_version=None):
     actual = capture("docker", "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image)
     if actual != "linux/amd64":
         raise ValueError(f"Unexpected image platform: {actual}")
@@ -512,6 +549,10 @@ def smoke(image, require_rsync=True):
     if require_rsync:
         checks.append("rsync --version")
     checks.append("sonic-cfggen --help")
+    if expected_version is not None:
+        validate_version(expected_version)
+        checks.append('test "$(sonic-cfggen -y /etc/sonic/sonic_version.yml -v build_version)" = '
+                      + shlex.quote(expected_version))
     run("docker", "run", "--rm", "--network", "none", "--entrypoint", "/bin/sh", image,
         "-ec", "; ".join(checks))
     return ["linux/amd64", *checks]
@@ -528,13 +569,22 @@ def validate_kvm(archive):
 
 
 def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", cache_dir=None,
-          docker_layer_cache=True, enable_ztp=False):
+          docker_layer_cache=True, enable_ztp=False, image_version=None):
     work = owned_work(work)
     if platform not in TARGETS:
         raise ValueError("Unsupported build platform")
     if branches(branch) != [branch] or not SHA.fullmatch(commit):
         raise ValueError("Expected one validated branch and a full commit SHA")
     positive(jobs)
+    version = validate_version(image_version) if image_version else version_name(
+        branch, date_label(datetime.now(timezone.utc).isoformat()), enable_ztp)
+    if not version.startswith(f"{branch}-itjamie.") or version.endswith("-ztp") != enable_ztp:
+        raise ValueError("Image version does not match the selected branch/ZTP setting")
+    builder_commit = os.environ.get("BUILDER_COMMIT")
+    if builder_commit and not SHA.fullmatch(builder_commit):
+        raise ValueError("Expected a full builder commit SHA")
+    version_arg = f"SONIC_IMAGE_VERSION={version}"
+    print(f"SONiC image version: {version}", flush=True)
     preflight(work, require_kvm=platform == "kvm")
     source = work / "source"
     source.mkdir()
@@ -553,19 +603,25 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
     configured_platform = "vs" if platform == "kvm" else platform
     run("make", "UNATTENDED=y", *cache_args, *docker_args, "init", cwd=source)
     patches = apply_branch_patches(source, work, branch)
+    compatibility += fix_vs_image_version(source)
     if docker_cache["enabled"]:
         docker_cache.update(stamp_docker_cache_inputs(source, patches))
         write_json(work / "docker-cache.json", docker_cache)
     for args in (("configure", f"PLATFORM={configured_platform}", "PLATFORM_ARCH=amd64"),
                  (f"SONIC_BUILD_JOBS={jobs}", f"target/{filename}")):
         run("make", "UNATTENDED=y", *cache_args, *docker_args,
-            f"ENABLE_ZTP={'y' if enable_ztp else 'n'}", *args, cwd=source)
+            version_arg, f"ENABLE_ZTP={'y' if enable_ztp else 'n'}", *args, cwd=source)
     archive = source / "target" / filename
     metadata = {"upstream": UPSTREAM, "branch": branch, "commit": commit,
                 "platform": platform, "filename": filename, "compatibility_fixes": compatibility,
                 "patches": patches, "docker_layer_cache": docker_cache,
                 "configured_platform": configured_platform,
-                "enable_ztp": enable_ztp}
+                "enable_ztp": enable_ztp, "image_version": version,
+                "builder_commit": builder_commit,
+                "build_label": os.environ.get("BUILD_LABEL"),
+                "build_started_at": os.environ.get("BUILD_STARTED_AT"),
+                "workflow_run_id": os.environ.get("GITHUB_RUN_ID"),
+                "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT")}
     if platform == "vs":
         config_digest = archive_image(archive)
         previous_images = set(capture("docker", "image", "ls", "--all", "--quiet", "--no-trunc").splitlines())
@@ -575,7 +631,8 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
         # Legacy layouts intentionally purge rsync from runtime images. The
         # extra rsync check verifies our assembly compatibility fix when used;
         # it is not a universal SONiC runtime dependency.
-        metadata["smoke_checks"] = smoke(image, require_rsync="cached-rsync-cleanup" in compatibility)
+        metadata["smoke_checks"] = smoke(image, require_rsync="cached-rsync-cleanup" in compatibility,
+                                         expected_version=version)
         metadata["image_id"] = image
         metadata["archive_image_config_digest"] = config_digest
     elif platform == "kvm":
@@ -727,6 +784,8 @@ def main():
             command.add_argument("--docker-layer-cache", choices=("true", "false"), default="true")
             command.add_argument("--enable-ztp", choices=("true", "false"), default="false",
                                  help="Include ZTP in upstream KVM/hardware installers")
+            command.add_argument("--image-version", default=os.environ.get("SONIC_IMAGE_VERSION"),
+                                 help="Image identity allocated by prepare; local default uses the current UTC date/hour")
         if name == "publish":
             command.add_argument("--repository", required=True)
             command.add_argument("--dockerhub", choices=("true", "false"), default="false")
@@ -754,7 +813,7 @@ def dispatch(args):
         print(work)
     elif args.command == "build":
         build(args.work, args.branch, args.commit, args.build_jobs, args.platform, args.cache_mode, args.cache_dir,
-              args.docker_layer_cache == "true", args.enable_ztp == "true")
+              args.docker_layer_cache == "true", args.enable_ztp == "true", args.image_version)
     elif args.command == "publish":
         publish(args.work, args.repository, args.dockerhub == "true")
     else:

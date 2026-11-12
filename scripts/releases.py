@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 
 from sonic_vs import (TARGETS, SHA, checksum, install_signal_handlers, maintenance_root,
-                      owned_work, runner_lock, selected_images, write_json)
+                      owned_work, runner_lock, selected_images, write_json, date_label, version_name)
 
 ASSET_LIMIT = 2 * 1024**3  # GitHub requires strictly less than 2 GiB per asset.
 PART_SIZE = 1024**3
@@ -90,7 +90,8 @@ def release(repository, tag):
             # title stays intact. Validate the commit before reusing it.
             if (item.get("draft") and item["tag_name"].startswith("untagged-") and
                     item.get("name", "").startswith("SONiC ") and
-                    item.get("name", "").endswith(f" — {tag}")):
+                    (item.get("name", "").endswith(f" — {tag}") or
+                     f"<!-- sonic-vs-builder-release: {tag} -->" in (item.get("body") or ""))):
                 drafts.append(item)
         if len(batch) < 100:
             break
@@ -117,18 +118,28 @@ def draft_release(repository, tag, target, metadata):
                 "ZTP: **Disabled** (`ENABLE_ZTP=n`)" if ztp is False else
                 "ZTP: **Not recorded** (older build)")
     ztp_note += ". Applies to KVM/hardware installers; the reduced Docker VS image does not include ZTP."
+    version_note = (f"Image version: `{metadata['image_version']}`\n\n"
+                    if metadata.get("image_version") else "")
+    started_note = (f"Build started (UTC): `{metadata['build_started_at']}`\n\n"
+                    if metadata.get("build_started_at") else "")
+    marker = f"<!-- sonic-vs-builder-release: {tag} -->"
+    if metadata.get("workflow_run_id") and metadata.get("workflow_run_attempt"):
+        marker += f"\n<!-- sonic-vs-builder-run: {metadata['workflow_run_id']}/{metadata['workflow_run_attempt']} -->"
     if existing is None:
         existing = api(repository, "/releases", "POST", {
-            "tag_name": tag, "target_commitish": target, "name": f"SONiC {metadata['branch']} — {tag}",
+            "tag_name": tag, "target_commitish": target,
+            "name": f"SONiC {metadata['branch']} — {metadata.get('build_label') or tag}",
             "draft": True, "make_latest": "false",
             "body": f"Source: {metadata['upstream']}\n\nBranch: `{metadata['branch']}`\n\n"
                     f"Upstream commit: `{metadata['commit']}`\n\n"
                     f"Builder commit: `{target}`\n\n"
+                    f"{version_note}{started_note}"
                     f"{ztp_note}\n\n"
                     f"[Build logs](https://github.com/{repository}/actions/runs/{os.environ['GITHUB_RUN_ID']})\n\n"
                     "Each selected platform has a metadata JSON, SHA256SUMS and download instructions. "
                     "Files at or above 2 GiB are split; reassemble their parts before use. "
-                    "The Broadcom installer is not hardware-boot-tested by this workflow.\n",
+                    "The Broadcom installer is not hardware-boot-tested by this workflow.\n\n"
+                    f"{marker}\n",
         })
     elif existing["draft"] and ztp is not None:
         # Preserve other notes when staging later platforms in the same draft.
@@ -141,6 +152,48 @@ def draft_release(repository, tag, target, metadata):
     if not existing["draft"]:
         raise ValueError("Refusing to change an already published release; start a new workflow run")
     return existing
+
+
+def reserve_build(repository, entry, target, run_id, attempt, started_at, enable_ztp):
+    """Claim a readable date tag atomically; never reuse another run's tag/assets."""
+    if not SHA.fullmatch(target) or not all(re.fullmatch(r"[1-9][0-9]*", str(v)) for v in (run_id, attempt)):
+        raise ValueError("Expected an exact builder SHA and positive workflow run/attempt")
+    base = date_label(started_at)
+    owner = f"<!-- sonic-vs-builder-run: {run_id}/{attempt} -->"
+    for number in range(1, 1001):
+        label = base + (f"-{number}" if number > 1 else "")
+        version = version_name(entry["branch"], label, enable_ztp)
+        tag = f"sonic-{entry['branch']}-{label}"
+        metadata = {**entry, "upstream": "https://github.com/sonic-net/sonic-buildimage.git",
+                    "build_label": label, "image_version": version, "enable_ztp": enable_ztp,
+                    "build_started_at": started_at, "workflow_run_id": str(run_id),
+                    "workflow_run_attempt": str(attempt)}
+        existing = release(repository, tag)
+        if existing:
+            if (existing.get("draft") and existing.get("target_commitish") == target and
+                    owner in (existing.get("body") or "")):
+                draft_release(repository, tag, target, metadata)
+                return {**entry, **{k: metadata[k] for k in (
+                    "build_label", "image_version", "build_started_at")}, "release_tag": tag}
+            continue
+        try:
+            # Creating a Git ref is the atomic reservation. Even an orphaned tag
+            # consumes its label; never move it or assume equal SHAs mean ownership.
+            api(repository, "/git/refs", "POST", {"ref": f"refs/tags/{tag}", "sha": target})
+        except GitHubAPIError as error:
+            if error.status == 422:
+                try:
+                    api(repository, "/git/ref/tags/" + urllib.parse.quote(tag, safe=""))
+                except GitHubAPIError as reference_error:
+                    if reference_error.status == 404:
+                        raise error
+                    raise
+                continue
+            raise
+        draft_release(repository, tag, target, metadata)
+        return {**entry, **{k: metadata[k] for k in (
+            "build_label", "image_version", "build_started_at")}, "release_tag": tag}
+    raise ValueError("Could not reserve a unique date-based release tag")
 
 
 def stage(work, repository, tag, target):

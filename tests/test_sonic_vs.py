@@ -100,8 +100,9 @@ class WorkTests(unittest.TestCase):
                 patch.object(builder, "cache_settings", return_value=[]):
             builder.build(self.work, "202605", COMMIT, "3", "broadcom")
         calls = [call.args for call in run.call_args_list]
-        self.assertIn(("make", "UNATTENDED=y", "ENABLE_ZTP=n", "configure", "PLATFORM=broadcom", "PLATFORM_ARCH=amd64"), calls)
-        self.assertIn(("make", "UNATTENDED=y", "ENABLE_ZTP=n", "SONIC_BUILD_JOBS=3", "target/sonic-broadcom.bin"), calls)
+        version = json.loads((self.work / "validated.json").read_text())["image_version"]
+        self.assertIn(("make", "UNATTENDED=y", f"SONIC_IMAGE_VERSION={version}", "ENABLE_ZTP=n", "configure", "PLATFORM=broadcom", "PLATFORM_ARCH=amd64"), calls)
+        self.assertIn(("make", "UNATTENDED=y", f"SONIC_IMAGE_VERSION={version}", "ENABLE_ZTP=n", "SONIC_BUILD_JOBS=3", "target/sonic-broadcom.bin"), calls)
         smoke.assert_not_called()
         metadata = json.loads((self.work / "validated.json").read_text())
         self.assertEqual(metadata["platform"], "broadcom")
@@ -192,6 +193,31 @@ class WorkTests(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError) as broken:
                 builder.smoke("sha256:legacy", require_rsync=False)
             self.assertEqual(broken.exception.returncode, 23)
+
+    @patch.object(builder, "capture", return_value="linux/amd64")
+    def test_smoke_rejects_a_cached_image_with_a_stale_version(self, _capture):
+        version = "202605-itjamie.20261112-22"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = root / "sonic_version.yml"
+            metadata.write_text(f"build_version: '{version}'\n")
+            supervisor = root / "supervisord"
+            supervisor.write_text("#!/bin/sh\nprintf '4.2.5\\n'\n")
+            supervisor.chmod(0o755)
+            cfggen = root / "sonic-cfggen"
+            cfggen.write_text(f'#!/bin/sh\nif [ "$1" != --help ]; then printf "%s\\n" "{version}"; fi\n')
+            cfggen.chmod(0o755)
+
+            def shell(*command):
+                script = command[-1].replace("/etc/sonic/sonic_version.yml", shlex.quote(str(metadata)))
+                script = script.replace("/usr/local/bin/supervisord", shlex.quote(str(supervisor)))
+                script = script.replace("sonic-cfggen", shlex.quote(str(cfggen)))
+                subprocess.run(["/bin/sh", "-ec", script], check=True, capture_output=True)
+
+            with patch.object(builder, "run", side_effect=shell):
+                builder.smoke("image", require_rsync=False, expected_version=version)
+                with self.assertRaises(subprocess.CalledProcessError):
+                    builder.smoke("image", require_rsync=False, expected_version=version + "-2")
 
     @patch.object(builder, "preflight")
     @patch.object(builder, "run")

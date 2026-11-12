@@ -53,6 +53,24 @@ Validate a fresh image before treating future build outputs as corrected.
 The historical comparison and unsuccessful tests below are retained as context;
 the older-image tests are now optional follow-up rather than the primary fix.
 
+## Edgecore VXLAN settings follow-up
+
+Read-only checks confirmed the running AS7326 with SAI 15.2.1.0.0.0.50.1 lacks
+the `common_config_support` opt-in and does not load the shared Trident3 profile.
+The SDK's loaded configuration had none of Edgecore's nine VXLAN/RIOT settings.
+It advertised legacy VXLAN/EVPN capabilities; this observation does not establish
+end-to-end VXLAN functionality or prove every explicit setting is mandatory.
+
+At the user's request, the branch patch
+`202605/0005-enable-as7326-edgecore-vxlan-settings.patch` now adds those exact
+nine settings from Edgecore commit `d39662e996c0e8748c9b96ad88dc5f5f524e8048`.
+The overlay interface allocation is 4096, matching Edgecore rather than the
+shared TD3 profile's 8192. The patch preserves unrelated upstream settings,
+port mappings and aliases and does not activate the complete common profile.
+No VXLAN settings were applied to the running switch during this follow-up.
+Test initialization, stable-cache headroom and L2/L3 VXLAN forwarding with the
+new profile before treating it as hardware-validated.
+
 ## Scope and version comparison
 
 The affected switch is `x86_64-accton_as7326_56x-r0`, HwSKU

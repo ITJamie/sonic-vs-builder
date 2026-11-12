@@ -1,0 +1,36 @@
+Subject: [202605] Enable Edgecore AS7326 VXLAN SDK configuration
+
+Apply the nine VXLAN/RIOT settings selected by Edgecore for this exact HwSKU.
+AS7326 does not opt into the upstream Broadcom common-profile merge, so these
+settings are absent from its loaded SDK configuration. Preserve Edgecore's
+4096 overlay-interface allocation rather than the common TD3 profile's 8192.
+Keep this scoped to AS7326; do not enable the entire shared profile or change
+port mappings, aliases, MMU settings or unrelated SDK resource policies.
+
+Vendor source: https://github.com/edge-core/sonic-buildimage/blob/d39662e996c0e8748c9b96ad88dc5f5f524e8048/device/accton/x86_64-accton_as7326_56x-r0/Accton-AS7326-56X/td3-as7326-48x25G+8x100G.config.bcm
+Verified upstream: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Remove or reconcile when upstream AS7326 supplies an equivalent VXLAN profile.
+
+These exact values match the vendor file. VXLAN forwarding and the resulting
+resource/stable-cache requirements still need validation with SAI 15.2.
+
+--- a/device/accton/x86_64-accton_as7326_56x-r0/Accton-AS7326-56X/td3-as7326-48x25G+8x100G.config.bcm
++++ b/device/accton/x86_64-accton_as7326_56x-r0/Accton-AS7326-56X/td3-as7326-48x25G+8x100G.config.bcm
+@@ -33,6 +33,17 @@
+ skip_L2_USER_ENTRY=0
+ bcm_tunnel_term_compatible_mode=1
+ l3_alpm_ipv6_128b_bkt_rsvd=1
++
++# VXLAN settings from Edgecore's AS7326 platform configuration.
++l3_ecmp_levels=2
++use_all_splithorizon_groups=1
++riot_enable=1
++sai_tunnel_support=1
++riot_overlay_l3_intf_mem_size=4096
++riot_overlay_l3_egress_mem_size=32768
++riot_overlay_ecmp_resilient_hash_size=16384
++flow_init_mode=1
++host_as_route_disable=1
+ 
+ dport_map_port_1=6
+ dport_map_port_2=2

@@ -95,3 +95,12 @@ are recorded under `compatibility_fixes`.
   all 56 front-panel ports. Forwarding and reboot validation remain outstanding.
   Patch integration checks application, both exact configuration changes and
   reapplication. See [the investigation](../docs/broadcom-sai-investigation.md).
+- `202605/0005-enable-as7326-edgecore-vxlan-settings.patch`: add the nine
+  VXLAN/RIOT SDK settings from Edgecore's AS7326 configuration at
+  `d39662e996c0e8748c9b96ad88dc5f5f524e8048`. This includes its exact overlay
+  allocations (4096 interfaces, 32768 egress entries and 16384 resilient-hash
+  entries), FlexFlow/tunnel/RIOT selection, hierarchical ECMP, split-horizon
+  configuration and host-as-route policy. It does not enable the broader
+  upstream common profile or change aliases, lanes, MMU or other vendor settings.
+  Integration checks exact changes and reapplication; VXLAN forwarding and
+  resource headroom on SAI 15.2 still require hardware testing.

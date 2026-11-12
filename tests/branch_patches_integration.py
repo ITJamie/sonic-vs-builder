@@ -12,6 +12,17 @@ from sonic_vs import apply_branch_patches
 COMMIT = "8076a44fa579fde75f73299f03e7f3cac298d9e3"
 CONSTRAINTS = "files/build/versions-public/build/build-sonic-slave-bookworm/versions-py3"
 URL = f"https://raw.githubusercontent.com/sonic-net/sonic-buildimage/{COMMIT}/{CONSTRAINTS}"
+VXLAN_CONFIG = """# VXLAN settings from Edgecore's AS7326 platform configuration.
+l3_ecmp_levels=2
+use_all_splithorizon_groups=1
+riot_enable=1
+sai_tunnel_support=1
+riot_overlay_l3_intf_mem_size=4096
+riot_overlay_l3_egress_mem_size=32768
+riot_overlay_ecmp_resilient_hash_size=16384
+flow_init_mode=1
+host_as_route_disable=1
+"""
 
 
 def relevant(text):
@@ -40,12 +51,15 @@ with tempfile.TemporaryDirectory() as directory:
     sdk.write_text(sdk_original)
     subprocess.run(["git", "init", "-q", str(source)], check=True)
     result = apply_branch_patches(source, work, "202605")
-    assert len(result) == 4 and all(item["status"] == "applied" for item in result)
+    assert len(result) == 5 and all(item["status"] == "applied" for item in result)
     assert sdk.read_text() == sdk_original.replace(
         "stable_size=0x5500000\n", "stable_size=0x8000000\n"
     ).replace(
         "sai_load_hw_config=/etc/bcm/flex/bcm56870_a0_premium_issu/b870.6.4.1/\n",
         "sai_load_hw_config=/etc/bcm/flex/bcm56870_a0_premium_issu/default/\n",
+    ).replace(
+        "l3_alpm_ipv6_128b_bkt_rsvd=1\n",
+        "l3_alpm_ipv6_128b_bkt_rsvd=1\n\n" + VXLAN_CONFIG,
     )
     assert template.read_text().index("RUN apt-get remove -y python3-pycparser") < template.read_text().index("# Install locally-built Python wheel dependencies")
     assert target.read_text() == original.replace("wcwidth==0.7.0\n", "wcwidth==0.9.2\n")

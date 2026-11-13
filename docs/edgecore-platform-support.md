@@ -51,6 +51,45 @@ LED retains amber. AS5835's existing native uppercase color scheme is separate
 and is deliberately preserved. Existing ignored devices are retained; failures
 are not hidden by adding service exclusions.
 
+## AS7326 PSU voltage validation
+
+Patch `0011` adds Edgecore's missing `psu_v_out_min` and `psu_v_out_max`
+definitions to both PSU PMBus devices. Registers `0xa4` and `0xa5` are decoded
+by the existing PDDF driver; the existing platform API converts millivolts to
+volts. No FSF045-specific constants or health-check exclusions are added.
+
+On 2026-11-13, both FSF019-611 PSUs on the AS7326 test switch returned
+11.390–12.593 V limits, with measured outputs around 12.06–12.19 V. Targeted
+PMBus re-registration and a `pmon` restart confirmed the values in sysfs, the
+platform API and STATE_DB, and cleared the voltage health errors. The existing
+100G link stayed up and cooling remained active. This validates the live edit;
+an image containing this patch has not yet been built or reboot-tested.
+
+PSU fan target, under-speed and over-speed APIs remain unsupported. Edgecore's
+target-speed override returns measured speed, which is not an independent
+setpoint; this patch does not adopt that workaround.
+
+Patches `0012` and `0013` complete the live health compatibility fix. `0012`
+excludes only `PSU1_FAN1.speed` and `PSU2_FAN1.speed` target comparisons,
+following the narrow exclusions proposed in upstream PR #8198. Presence,
+status, airflow, RPM-derived speed reporting and PSU voltage/power-good checks
+remain enabled. The existing PDDF status reports a stopped fan as failed;
+independent detection of a slowly spinning fan still needs real hardware
+thresholds or alarms. Missing target APIs remain explicitly `N/A` in STATE_DB.
+
+Once speed comparisons were excluded, direction checking exposed literal
+`F2B*` values from both FSF019-611 PSUs. The lookup previously accepted only
+`F2B`, leaving an untranslated label that mismatched the chassis's `EXHAUST`.
+`0013` adds that exact observed spelling to the PSU direction map. Edgecore's
+custom PSU driver independently identifies FSF019 as front-to-back/exhaust.
+Unknown labels are not normalized and no direction exclusion is added.
+
+After restarting `system-health` and `pmon` on 2026-11-13, Services and Hardware
+both reported OK, and the chassis API read back a green status LED. Both PSU
+directions were `EXHAUST`, voltage limits remained correct, there were no failed
+systemd units and Ethernet48 remained up at 100G. These are live-edit results;
+the patches have not yet been built into an image or tested across a reboot.
+
 ## Watchdog details
 
 The observed AS7326 error chain was:

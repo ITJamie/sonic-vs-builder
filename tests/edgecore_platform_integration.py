@@ -73,10 +73,19 @@ class EdgecorePlatform(unittest.TestCase):
             self.assertEqual({k: v for k, v in before.items() if k not in excluded},
                              {k: v for k, v in after.items() if k not in excluded})
 
-    def test_pddf_led_changes_preserve_every_register_and_sensor(self):
+    def test_pddf_changes_preserve_existing_sensors_and_add_as7326_voltage_limits(self):
         for model in MODELS[1:]:
             path = DEVICE + model + "-r0/pddf/pddf-device.json"
             before, after = json.loads(ORIGINALS[path]), json.loads((SOURCE / path).read_text())
+            if model == "as7326_56x":
+                for key, address in (("PSU1-PMBUS", "0x59"), ("PSU2-PMBUS", "0x5b")):
+                    attrs = after[key]["i2c"]["attr_list"]
+                    limits = [a for a in attrs if a["attr_name"] in {"psu_v_out_min", "psu_v_out_max"}]
+                    self.assertEqual(limits, [
+                        {"attr_name": name, "attr_devaddr": address, "attr_devtype": "pmbus",
+                         "attr_offset": offset, "attr_mask": "0x0", "attr_cmpval": "0xff", "attr_len": "2"}
+                        for name, offset in (("psu_v_out_min", "0xa4"), ("psu_v_out_max", "0xa5"))])
+                    after[key]["i2c"]["attr_list"] = [a for a in attrs if a not in limits]
             for name, device in after.items():
                 if device.get("dev_info", {}).get("device_type") == "LED":
                     # Label changes must not alter register addresses/values or topology.
@@ -102,6 +111,19 @@ class EdgecorePlatform(unittest.TestCase):
                 directory = SOURCE / (DEVICE + model + "-r0")
                 data = json.loads((directory / "pddf/pddf-device.json").read_text())
                 health = json.loads((directory / "system_health_monitoring_config.json").read_text())
+                if model == "as7326_56x":
+                    original = json.loads(ORIGINALS[DEVICE + model + "-r0/system_health_monitoring_config.json"])
+                    self.assertEqual(health["devices_to_ignore"], original["devices_to_ignore"] +
+                                     ["PSU1_FAN1.speed", "PSU2_FAN1.speed"])
+                    original["led_color"] = health["led_color"]
+                    original["devices_to_ignore"] = health["devices_to_ignore"]
+                    self.assertEqual(health, original)
+                    plugin_path = DEVICE + model + "-r0/pddf/pd-plugin.json"
+                    plugin = json.loads((SOURCE / plugin_path).read_text())
+                    mapping = plugin["PSU"]["psu_fan_dir"]["i2c"]["valmap"]
+                    self.assertEqual(mapping.pop("F2B*"), mapping["F2B"])
+                    self.assertEqual(mapping["F2B"], "EXHAUST")
+                    self.assertEqual(plugin, json.loads(ORIGINALS[plugin_path]))
                 colors = {a["attr_name"] for a in data["DIAG_LED"]["i2c"]["attr_list"]}
                 self.assertLessEqual(set(health["led_color"].values()), colors)
                 allowed = {"off", "green", "red", "yellow", "blue", "amber",
@@ -411,7 +433,7 @@ def main():
         subprocess.run(["git", "-C", str(SOURCE), "update-index", "--add", "--cacheinfo",
                         "160000", "a" * 40, "src/sonic-platform-common"], check=True)
         results = apply_branch_patches(SOURCE, work, "202605")
-        assert len(results) == 10 and all(r["status"] == "applied" for r in results)
+        assert len(results) == 13 and all(r["status"] == "applied" for r in results)
         assert all(r["status"] == "already-applied" for r in apply_branch_patches(SOURCE, work, "202605"))
         for path in SOURCE.rglob("*.py"):
             compile(path.read_text(), str(path), "exec")

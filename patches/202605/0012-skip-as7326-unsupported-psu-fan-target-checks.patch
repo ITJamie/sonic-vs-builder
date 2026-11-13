@@ -1,0 +1,23 @@
+Subject: [202605] Skip only unsupported AS7326 PSU fan target comparisons
+
+These self-controlled PSU fans do not expose a target through PDDF. Keep
+actual speed/status, presence, airflow and PSU voltage checks; exclude only
+the two per-fan target-speed comparisons, without inventing target values.
+A stopped fan still reports failed status through the existing PDDF API.
+This does not provide independent detection of a slowly spinning fan.
+Precedent: https://github.com/sonic-net/sonic-buildimage/pull/8198
+Verified upstream: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+
+--- a/device/accton/x86_64-accton_as7326_56x-r0/system_health_monitoring_config.json
++++ b/device/accton/x86_64-accton_as7326_56x-r0/system_health_monitoring_config.json
+@@ -2,7 +2,9 @@
+     "services_to_ignore": [],
+     "devices_to_ignore": [
+         "asic",
+-        "psu.temperature"
++        "psu.temperature",
++        "PSU1_FAN1.speed",
++        "PSU2_FAN1.speed"
+ 
+     ],
+     "user_defined_checkers": [],

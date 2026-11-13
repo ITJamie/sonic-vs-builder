@@ -122,6 +122,20 @@ are recorded under `compatibility_fixes`.
   IDT clock initialization before PDDF binds their muxes, following upstream
   [PR #30498](https://github.com/sonic-net/sonic-buildimage/pull/30498).
 
+- `202605/0011-read-as7326-psu-voltage-limits.patch`: expose the two PSU output
+  voltage limits using Edgecore's PDDF register definitions (`0xa4`/`0xa5`).
+  Hardware-tested with two FSF019-611 PSUs: both returned 11.390–12.593 V after
+  PMBus device reload and `pmon` restart; voltage health errors cleared.
+  No limits are hardcoded and PSU fan target reporting remains unresolved.
+- `202605/0012-skip-as7326-unsupported-psu-fan-target-checks.patch`: exclude
+  only `PSU1_FAN1.speed` and `PSU2_FAN1.speed` target comparisons. Retain
+  fan status, direction, measured speed and PSU voltage/power-good checks.
+- `202605/0013-decode-as7326-fsf019-airflow-label.patch`: map the observed
+  FSF019-611 `F2B*` value to `EXHAUST`, consistent with Edgecore's model-based
+  decoder. Other airflow labels and direction checks remain intact. With these
+  two patches and `0011`, the test switch reports Services/Hardware OK and a
+  green status LED. No image build or reboot test has been performed yet.
+
 The four-family support matrix, exact scope, source pins and required hardware
 checks are in [Edgecore platform support](../docs/edgecore-platform-support.md).
 The CI regression applies/reapplies all patches to pinned upstream and executes

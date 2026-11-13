@@ -1,0 +1,23 @@
+Subject: [202605] Recognize the FSF019 PSU's observed F2B* airflow label
+
+Both FSF019-611 PSUs on the AS7326 test switch return the literal F2B* from
+psu_fan_dir. The existing lookup accepts only F2B, so health reports an
+incorrect mismatch with EXHAUST chassis fans after target checks are skipped.
+Map this exact observed label to the existing EXHAUST value. Keep unknown
+labels unchanged so genuine mismatches and unsupported data stay visible.
+Edgecore's custom driver independently classifies FSF019 as F2B:
+https://github.com/edge-core/sonic-buildimage/blob/d39662e996c0e8748c9b96ad88dc5f5f524e8048/platform/broadcom/sonic-platform-modules-accton/as7326-56x/modules/pddf_custom_psu.c
+No fan direction or status check is disabled; no hardware registers change.
+Verified upstream: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+
+--- a/device/accton/x86_64-accton_as7326_56x-r0/pddf/pd-plugin.json
++++ b/device/accton/x86_64-accton_as7326_56x-r0/pddf/pd-plugin.json
+@@ -34,7 +34,7 @@
+         {
+             "i2c":
+             {
+-                "valmap": { "F2B":"EXHAUST", "B2F":"INTAKE" }
++                "valmap": { "F2B":"EXHAUST", "F2B*":"EXHAUST", "B2F":"INTAKE" }
+             }
+         },
+ 

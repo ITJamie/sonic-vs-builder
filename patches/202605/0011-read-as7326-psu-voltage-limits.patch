@@ -1,0 +1,33 @@
+Subject: [202605] Read AS7326 PSU output voltage limits from hardware
+
+Port Edgecore's psu_v_out_min/max PDDF definitions for both PSU PMBus
+interfaces. The existing driver decodes registers 0xa4/0xa5 and the platform
+API converts millivolts to volts; no model-specific thresholds are hardcoded.
+Source: https://github.com/edge-core/sonic-buildimage/blob/d39662e996c0e8748c9b96ad88dc5f5f524e8048/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json
+
+Validated on AS7326 with two FSF019-611 PSUs on 2026-11-13: after targeted
+PMBus re-registration and pmon restart, both reported 11.390/12.593 V limits
+through sysfs, the platform API and STATE_DB. Voltage health errors cleared.
+PSU fan target/under-speed/over-speed APIs remain a separate open issue.
+Verified upstream source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+
+--- a/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json
++++ b/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json
+@@ -204,6 +204,8 @@
+                 { "attr_name":"psu_mfr_id", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0X99", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"10" },
+                 { "attr_name":"psu_fan_dir", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0xc3", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"5"},
+                 { "attr_name":"psu_v_out", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x8b", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_v_out_min", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0xa4", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_v_out_max", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0xa5", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_i_out", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x8c", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_p_out", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x96", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_fan1_speed_rpm", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x90", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+@@ -253,6 +255,8 @@
+                 { "attr_name":"psu_mfr_id", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0X99", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"10" },
+                 { "attr_name":"psu_fan_dir", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0xc3", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"5"},
+                 { "attr_name":"psu_v_out", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x8b", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_v_out_min", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0xa4", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_v_out_max", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0xa5", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_i_out", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x8c", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_p_out", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x96", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_fan1_speed_rpm", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x90", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},

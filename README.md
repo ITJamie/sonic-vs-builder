@@ -215,9 +215,13 @@ GH_TOKEN="$(gh auth token)" python3 scripts/cleanup_releases.py --repository ITJ
 ```
 
 The token needs repository Contents write access and visibility of drafts.
-`--days` can increase retention; two days is the minimum. The `--apply` command
-can be scheduled daily through cron or a separate maintenance workflow. No
-schedule is installed automatically. GitHub's automatic source-code archives do
-not count as attached assets; this script does not manage GHCR packages.
+`--days` can increase retention; two days is the minimum.
+The [Clean up empty releases](.github/workflows/cleanup-releases.yml) GitHub Action
+runs this script daily at **04:17 UTC**, with `--days 2 --apply`. It can also be
+started manually from Actions. Both creation and last-update times must be older
+than two days, and any attached asset protects the release. The workflow uses
+the repository's built-in token with Contents write permission; no extra secrets
+are required. GitHub's automatic source-code archives do not count as attached
+assets. Git tags and registry images are left alone.
 
 Future build improvements are tracked in [docs/future-work.md](docs/future-work.md).

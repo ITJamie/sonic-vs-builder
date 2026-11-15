@@ -37,7 +37,7 @@ class Inputs(unittest.TestCase):
     def test_resolve_multiple_exact_refs(self, capture):
         capture.side_effect = [f"{COMMIT}\trefs/heads/202605", f"{COMMIT}\trefs/heads/202511"]
         matrix = builder.prepare("202605,202511", "1")
-        self.assertEqual(matrix, {"include": [{"branch": b, "commit": COMMIT, "images": ["vs", "kvm", "broadcom"]}
+        self.assertEqual(matrix, {"include": [{"branch": b, "commit": COMMIT, "upstream": builder.UPSTREAM, "submodule_overrides": {}, "images": ["vs", "kvm", "broadcom"]}
                                               for b in ("202605", "202511")]})
 
     @patch.object(builder, "capture", return_value=f"{COMMIT}\trefs/heads/202605")

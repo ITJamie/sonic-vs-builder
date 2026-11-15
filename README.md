@@ -8,6 +8,13 @@ docker pull ghcr.io/itjamie/sonic-vs-builder:202605
 
 Images are Linux amd64, built from the selected `sonic-net/sonic-buildimage` commit. Cached builds apply targeted build-hook compatibility fixes when recognized upstream bugs are detected; metadata records applied fixes. The VS container tag is exactly the upstream branch name. Rebuilding a branch updates its container tag; use the digest from the workflow summary when you need an immutable reference. There is no additional `latest` alias. Downloadable releases retain every successful build separately.
 
+Set `source_repository` to another public GitHub `owner/repository` to build a
+fork instead; the default remains `sonic-net/sonic-buildimage`. The existing
+`branches` input selects branches in that repository. Source URLs and resolved
+commits are recorded in release notes and image metadata. Registry tags still
+use the branch name, so the same branch name in different repositories replaces
+the same VS registry tag.
+
 With Docker Hub publishing enabled (the workflow default), the same VS image is also available as `itjamie/docker-sonic-vs:<branch>`.
 
 ## Set up a runner
@@ -31,6 +38,24 @@ gh workflow run build.yml --repo ITJamie/sonic-vs-builder -f branches=202605 -f 
 gh workflow run build.yml --repo ITJamie/sonic-vs-builder -f branches=202605,202511 -f images=vs -f build_jobs=3
 gh run list --repo ITJamie/sonic-vs-builder --workflow build.yml
 ```
+
+For the Accton fork branch, including its unmerged watchdog dependency:
+
+```sh
+gh workflow run build.yml --repo ITJamie/sonic-vs-builder \
+  -f source_repository=ITJamie/sonic-buildimage -f branches=accton-fixes \
+  -f images=broadcom -f enable_ztp=true \
+  -f 'submodule_overrides={"src/sonic-platform-common":"ITJamie/fork-sonic-platform-common"}'
+```
+
+`submodule_overrides` defaults to `{}`. It accepts a JSON object mapping declared
+submodule paths to public GitHub repositories, changing only where pinned commits
+are fetched. It does not select newer submodule commits or edit `.gitmodules`.
+Use it when a source branch pins a dependency available only in a fork. Native
+package caches are isolated by repository, override configuration and branch;
+the default upstream cache layout and shared versioned download cache remain.
+Branch patches still match the selected branch name exactly: `accton-fixes`
+does not apply the downstream `patches/202605` series.
 
 All names are validated and resolved before any self-hosted job starts. Whitespace is trimmed and duplicate branches are removed. Empty entries, nonexistent branches, and branch names that cannot be represented exactly as Docker tags (for example `feature/test`) fail validation. Tags and arbitrary commit inputs are not accepted. Every build uses the resolved branch commit and its pinned submodules, even if the branch advances while waiting for the runner.
 

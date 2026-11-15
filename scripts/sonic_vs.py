@@ -20,6 +20,7 @@ import tarfile
 import tempfile
 
 UPSTREAM = "https://github.com/sonic-net/sonic-buildimage.git"
+DEFAULT_SOURCE = "sonic-net/sonic-buildimage"
 TAG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z", re.ASCII)
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 MARKER = ".sonic-vs-builder"
@@ -176,17 +177,55 @@ def selected_images(images):
     raise ValueError("images must be all, both, vs, kvm or broadcom")
 
 
-def prepare(value, jobs, images="all"):
+def source_url(repository):
+    """Accept public GitHub owner/repository names, not arbitrary Git transports."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*", repository):
+        raise ValueError("Source repository must be a GitHub owner/repository name")
+    if repository.endswith(".git") or repository.split("/")[1] in (".", ".."):
+        raise ValueError("Use owner/repository without a .git suffix")
+    return f"https://github.com/{repository}.git"
+
+
+def submodule_overrides(value):
+    overrides = json.loads(value) if isinstance(value, str) else value
+    if not isinstance(overrides, dict):
+        raise ValueError("Submodule overrides must be a JSON object of path: owner/repository")
+    for path, repository in overrides.items():
+        if (not isinstance(path, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*", path)
+                or any(part in (".", "..") for part in path.split("/"))
+                or not isinstance(repository, str)):
+            raise ValueError("Invalid submodule path or repository")
+        source_url(repository)
+    return overrides
+
+
+def configure_submodule_overrides(source, overrides):
+    if not overrides:
+        return
+    output = capture("git", "-C", str(source), "config", "--file", ".gitmodules",
+                     "--get-regexp", r"^submodule\..*\.path$")
+    names = {line.split(None, 1)[1]: line.split(None, 1)[0][:-5]
+             for line in output.splitlines()}
+    for path, repository in overrides.items():
+        if path not in names:
+            raise ValueError(f"Submodule override is not a declared submodule: {path}")
+        run("git", "-C", str(source), "config", "--local", names[path] + ".url", source_url(repository))
+
+
+def prepare(value, jobs, images="all", source_repository=DEFAULT_SOURCE, overrides="{}"):
     positive(jobs)
+    upstream = source_url(source_repository)
+    overrides = submodule_overrides(overrides)
     selected = selected_images(images)
     entries = []
     for branch in branches(value):
         ref = f"refs/heads/{branch}"
-        output = capture("git", "ls-remote", "--exit-code", "--heads", UPSTREAM, ref)
+        output = capture("git", "ls-remote", "--exit-code", "--heads", upstream, ref)
         matches = [line.split() for line in output.splitlines() if line.split()[-1] == ref]
         if len(matches) != 1 or not SHA.fullmatch(matches[0][0]):
             raise ValueError(f"Cannot resolve upstream branch: {branch}")
-        entries.append({"branch": branch, "commit": matches[0][0],
+        entries.append({"branch": branch, "commit": matches[0][0], "upstream": upstream,
+                        "submodule_overrides": overrides,
                         "images": selected})
     return {"include": entries}
 
@@ -391,7 +430,7 @@ def fix_cached_rsync_cleanup(source, mode):
     return ["cached-rsync-cleanup"]
 
 
-def cache_settings(source, work, branch, mode="read-write", directory=None):
+def cache_settings(source, work, branch, mode="read-write", directory=None, source_identity=None):
     """Use native dependency/version caches; never share raw target directories."""
     if mode not in ("read-write", "off"):
         raise ValueError("cache_mode must be read-write or off")
@@ -417,8 +456,11 @@ def cache_settings(source, work, branch, mode="read-write", directory=None):
     # Cleanup removes the entire work directory. Persistent data must be outside it.
     if root.is_relative_to(work.resolve()):
         raise ValueError("Persistent cache must be outside the temporary work directory")
-    packages = root / "v1/branches" / branch / "amd64/packages"
-    local_packages = root / "v1/branches" / branch / "amd64/local-packages"
+    namespace = root / "v1"
+    if source_identity:
+        namespace = namespace / "sources" / hashlib.sha256(source_identity.encode()).hexdigest()[:16]
+    packages = namespace / "branches" / branch / "amd64/packages"
+    local_packages = namespace / "branches" / branch / "amd64/local-packages"
     downloads = root / "v1/downloads/amd64"
     package_source = str(packages)
     # 'cache' is the read/write spelling supported by old and current branches.
@@ -569,8 +611,11 @@ def validate_kvm(archive):
 
 
 def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", cache_dir=None,
-          docker_layer_cache=True, enable_ztp=False, image_version=None):
+          docker_layer_cache=True, enable_ztp=False, image_version=None,
+          source_repository=DEFAULT_SOURCE, overrides="{}"):
     work = owned_work(work)
+    upstream = source_url(source_repository)
+    overrides = submodule_overrides(overrides)
     if platform not in TARGETS:
         raise ValueError("Unsupported build platform")
     if branches(branch) != [branch] or not SHA.fullmatch(commit):
@@ -589,14 +634,17 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
     source = work / "source"
     source.mkdir()
     run("git", "init", str(source))
-    run("git", "-C", str(source), "remote", "add", "origin", UPSTREAM)
+    run("git", "-C", str(source), "remote", "add", "origin", upstream)
     run("git", "-C", str(source), "fetch", "--depth=1", "origin", commit)
     run("git", "-C", str(source), "checkout", "--detach", commit)
     if capture("git", "-C", str(source), "rev-parse", "HEAD") != commit:
         raise ValueError("Checkout differs from resolved upstream commit")
+    configure_submodule_overrides(source, overrides)
     compatibility = fix_download_cache(source, cache_mode)
     compatibility += fix_cached_rsync_cleanup(source, cache_mode)
-    cache_args = cache_settings(source, work, branch, cache_mode, cache_dir)
+    identity = (json.dumps([upstream.lower(), overrides], sort_keys=True)
+                if upstream.lower() != UPSTREAM or overrides else None)
+    cache_args = cache_settings(source, work, branch, cache_mode, cache_dir, source_identity=identity)
     docker_args, docker_cache = docker_cache_settings(source, docker_layer_cache)
     write_json(work / "docker-cache.json", docker_cache)
     filename = TARGETS[platform]
@@ -612,7 +660,8 @@ def build(work, branch, commit, jobs, platform="vs", cache_mode="read-write", ca
         run("make", "UNATTENDED=y", *cache_args, *docker_args,
             version_arg, f"ENABLE_ZTP={'y' if enable_ztp else 'n'}", *args, cwd=source)
     archive = source / "target" / filename
-    metadata = {"upstream": UPSTREAM, "branch": branch, "commit": commit,
+    metadata = {"upstream": upstream, "branch": branch, "commit": commit,
+                "submodule_overrides": overrides,
                 "platform": platform, "filename": filename, "compatibility_fixes": compatibility,
                 "patches": patches, "docker_layer_cache": docker_cache,
                 "configured_platform": configured_platform,
@@ -770,11 +819,15 @@ def main():
     prep.add_argument("--branches", required=True)
     prep.add_argument("--build-jobs", default="3")
     prep.add_argument("--images", choices=("all", "both", *TARGETS), default="all")
+    prep.add_argument("--source-repository", default=DEFAULT_SOURCE)
+    prep.add_argument("--submodule-overrides", default="{}")
     sub.add_parser("create-work")
     for name in ("build", "publish", "cleanup"):
         command = sub.add_parser(name)
         command.add_argument("--work", required=True)
         if name == "build":
+            command.add_argument("--source-repository", default=DEFAULT_SOURCE)
+            command.add_argument("--submodule-overrides", default="{}")
             command.add_argument("--branch", required=True)
             command.add_argument("--commit", required=True)
             command.add_argument("--build-jobs", default="3")
@@ -806,14 +859,16 @@ def main():
 
 def dispatch(args):
     if args.command == "prepare":
-        print(json.dumps(prepare(args.branches, args.build_jobs, args.images), separators=(",", ":")))
+        print(json.dumps(prepare(args.branches, args.build_jobs, args.images,
+                                 args.source_repository, args.submodule_overrides), separators=(",", ":")))
     elif args.command == "create-work":
         work = Path(tempfile.mkdtemp(prefix="sonic-vs-", dir=os.environ.get("RUNNER_TEMP")))
         (work / MARKER).touch()
         print(work)
     elif args.command == "build":
         build(args.work, args.branch, args.commit, args.build_jobs, args.platform, args.cache_mode, args.cache_dir,
-              args.docker_layer_cache == "true", args.enable_ztp == "true", args.image_version)
+              args.docker_layer_cache == "true", args.enable_ztp == "true", args.image_version,
+              args.source_repository, args.submodule_overrides)
     elif args.command == "publish":
         publish(args.work, args.repository, args.dockerhub == "true")
     else:

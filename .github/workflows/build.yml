@@ -3,6 +3,16 @@ name: Build SONiC images
 on:
   workflow_dispatch:
     inputs:
+      source_repository:
+        description: Public GitHub SONiC source repository (owner/repository)
+        required: true
+        default: sonic-net/sonic-buildimage
+        type: string
+      submodule_overrides:
+        description: 'Optional JSON of submodule path to GitHub owner/repository (pinned commits unchanged)'
+        required: false
+        default: '{}'
+        type: string
       branches:
         description: Comma-separated upstream branches (also used as VS image tags)
         required: true
@@ -82,8 +92,10 @@ jobs:
           BRANCHES: ${{ inputs.branches }}
           BUILD_JOBS: ${{ inputs.build_jobs }}
           IMAGES: ${{ inputs.images }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SUBMODULE_OVERRIDES: ${{ inputs.submodule_overrides }}
         run: |
-          matrix=$(python3 scripts/sonic_vs.py prepare --branches "$BRANCHES" --build-jobs "$BUILD_JOBS" --images "$IMAGES")
+          matrix=$(python3 scripts/sonic_vs.py prepare --branches "$BRANCHES" --build-jobs "$BUILD_JOBS" --images "$IMAGES" --source-repository "$SOURCE_REPOSITORY" --submodule-overrides "$SUBMODULE_OVERRIDES")
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
       - name: Anchor release tags and verify draft publication before long builds
         id: identity
@@ -112,6 +124,10 @@ jobs:
           # output. Reconstruct it in the build job from the allocated label.
           for entry in matrix["include"]:
               del entry["image_version"]
+              # Fork URLs can contain the same masked username. Build steps
+              # already receive these immutable dispatch inputs directly.
+              entry.pop("upstream", None)
+              entry.pop("submodule_overrides", None)
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write("matrix=" + json.dumps(matrix, separators=(",", ":")) + "\n")
           PY
@@ -135,6 +151,8 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       BUILDER_COMMIT: ${{ github.sha }}
       SONIC_CACHE_DIR: ${{ vars.SONIC_CACHE_DIR }}
+      SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+      SUBMODULE_OVERRIDES: ${{ inputs.submodule_overrides }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -172,7 +190,7 @@ jobs:
           DOCKER_LAYER_CACHE: ${{ inputs.docker_layer_cache }}
         run: |
           set -o pipefail
-          python3 -u scripts/sonic_vs.py build --platform vs --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" --enable-ztp "$ENABLE_ZTP" 2>&1 | tee "$WORK/build.log"
+          python3 -u scripts/sonic_vs.py build --platform vs --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" --enable-ztp "$ENABLE_ZTP" --source-repository "$SOURCE_REPOSITORY" --submodule-overrides "$SUBMODULE_OVERRIDES" 2>&1 | tee "$WORK/build.log"
       - name: Publish validated VS image to selected registries
         if: ${{ contains(matrix.images, 'vs') }}
         env:
@@ -228,7 +246,7 @@ jobs:
           DOCKER_LAYER_CACHE: ${{ inputs.docker_layer_cache }}
         run: |
           set -o pipefail
-          python3 -u scripts/sonic_vs.py build --platform kvm --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" --enable-ztp "$ENABLE_ZTP" 2>&1 | tee "$WORK/build.log"
+          python3 -u scripts/sonic_vs.py build --platform kvm --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" --enable-ztp "$ENABLE_ZTP" --source-repository "$SOURCE_REPOSITORY" --submodule-overrides "$SUBMODULE_OVERRIDES" 2>&1 | tee "$WORK/build.log"
       - name: Stage KVM downloads in draft release
         if: ${{ contains(matrix.images, 'kvm') }}
         env:
@@ -273,7 +291,7 @@ jobs:
           DOCKER_LAYER_CACHE: ${{ inputs.docker_layer_cache }}
         run: |
           set -o pipefail
-          python3 -u scripts/sonic_vs.py build --platform broadcom --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" --enable-ztp "$ENABLE_ZTP" 2>&1 | tee "$WORK/build.log"
+          python3 -u scripts/sonic_vs.py build --platform broadcom --work "$WORK" --branch "$BRANCH" --commit "$COMMIT" --build-jobs "$BUILD_JOBS" --cache-mode "$CACHE_MODE" --docker-layer-cache "$DOCKER_LAYER_CACHE" --enable-ztp "$ENABLE_ZTP" --source-repository "$SOURCE_REPOSITORY" --submodule-overrides "$SUBMODULE_OVERRIDES" 2>&1 | tee "$WORK/build.log"
       - name: Stage Broadcom downloads in draft release
         if: ${{ contains(matrix.images, 'broadcom') }}
         env:

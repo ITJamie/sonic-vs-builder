@@ -118,6 +118,10 @@ def draft_release(repository, tag, target, metadata):
                 "ZTP: **Disabled** (`ENABLE_ZTP=n`)" if ztp is False else
                 "ZTP: **Not recorded** (older build)")
     ztp_note += ". Applies to KVM/hardware installers; the reduced Docker VS image does not include ZTP."
+    overrides_note = ("Submodule source overrides (pinned commits unchanged):\n" +
+                      "".join(f"- `{path}`: https://github.com/{repo}\n"
+                              for path, repo in metadata.get("submodule_overrides", {}).items()) + "\n"
+                      if metadata.get("submodule_overrides") else "")
     version_note = (f"Image version: `{metadata['image_version']}`\n\n"
                     if metadata.get("image_version") else "")
     started_note = (f"Build started (UTC): `{metadata['build_started_at']}`\n\n"
@@ -133,7 +137,7 @@ def draft_release(repository, tag, target, metadata):
             "body": f"Source: {metadata['upstream']}\n\nBranch: `{metadata['branch']}`\n\n"
                     f"Upstream commit: `{metadata['commit']}`\n\n"
                     f"Builder commit: `{target}`\n\n"
-                    f"{version_note}{started_note}"
+                    f"{version_note}{started_note}{overrides_note}"
                     f"{ztp_note}\n\n"
                     f"[Build logs](https://github.com/{repository}/actions/runs/{os.environ['GITHUB_RUN_ID']})\n\n"
                     "Each selected platform has a metadata JSON, SHA256SUMS and download instructions. "
@@ -164,7 +168,7 @@ def reserve_build(repository, entry, target, run_id, attempt, started_at, enable
         label = base + (f"-{number}" if number > 1 else "")
         version = version_name(entry["branch"], label, enable_ztp)
         tag = f"sonic-{entry['branch']}-{label}"
-        metadata = {**entry, "upstream": "https://github.com/sonic-net/sonic-buildimage.git",
+        metadata = {**entry, "upstream": entry.get("upstream", "https://github.com/sonic-net/sonic-buildimage.git"),
                     "build_label": label, "image_version": version, "enable_ztp": enable_ztp,
                     "build_started_at": started_at, "workflow_run_id": str(run_id),
                     "workflow_run_attempt": str(attempt)}

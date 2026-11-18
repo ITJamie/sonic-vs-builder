@@ -118,7 +118,11 @@ with tempfile.TemporaryDirectory() as directory:
     # Evaluate upstream Docker declarations rather than assuming that a Bookworm
     # host image cannot contain containers built on an older distribution.
     tree_url = f"https://api.github.com/repos/sonic-net/sonic-buildimage/git/trees/{COMMIT}?recursive=1"
-    tree = json.load(urllib.request.urlopen(tree_url, timeout=60))["tree"]
+    headers = {"Accept": "application/vnd.github+json"}
+    if token := os.environ.get("GH_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
+    tree = json.load(urllib.request.urlopen(
+        urllib.request.Request(tree_url, headers=headers), timeout=60))["tree"]
     paths = {entry["path"] for entry in tree if entry["type"] == "blob" and (
         (entry["path"].startswith("rules/docker-") and entry["path"].endswith(".mk")) or
         (entry["path"].count("/") == 2 and entry["path"].endswith(".mk") and

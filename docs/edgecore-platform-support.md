@@ -20,7 +20,9 @@ is performed. Older upstream branches do not automatically receive these patches
 | --- | --- | --- | --- | --- |
 | Health / status LED | Preserve existing native methods and config | Add PDDF methods and matching LED labels | Add PDDF methods, LED labels and missing health config | Add PDDF methods and matching LED labels |
 | CPU hardware watchdog | Add native adapter and lazy chassis getter | Add missing adapter | Replace existing adapter's unsafe constructor behavior | Add missing adapter |
-| Thermal control | Full speed on missing/nonfinite readings, then recover | Full-speed startup and sensor fallback/retry | Same, plus correct exhaust/intake policy selection | Full-speed startup and sensor fallback/retry |
+| Thermal control | Original startup/policy; full speed on missing/nonfinite readings, then recover | Original startup/policy; sensor fallback/retry | Same, plus correct exhaust/intake policy selection | Original startup/policy; sensor fallback/retry |
+| PSU monitoring | VOUT_MODE-aware voltage limits; unsupported target-speed checks excluded | Hardware voltage limits, F2B* mapping and narrow target-speed exclusions | Hardware voltage/temperature limits, F2B* mapping and narrow target-speed exclusions | Preserve existing monitoring |
+| CPU temperatures | Package/core readings and kernel thresholds | Preserve existing inventory | Package/core readings and kernel thresholds | Preserve existing inventory |
 | Service recovery | Restart unexpected monitor failures | Same | Same | Same |
 | IDT clock ordering | Not applicable | Before PDDF mux binding | Before PDDF mux binding | Not applicable |
 | SDK stable cache | 128 MiB | Existing tested 128 MiB patch | 128 MiB | Preserve vendor/upstream profile |
@@ -123,8 +125,9 @@ readiness is a likely cause; the exact transient bus failure has not been proven
 
 Required missing, invalid or nonfinite readings now select 100% fan PWM and return
 to the existing polling loop. Valid readings resume each model's thermal policy.
-No temperature thresholds or normal fan policy tables are changed. PDDF monitors
-start at full speed, and unexpected process failures restart after five seconds.
+No temperature thresholds, startup fan speeds or normal fan policy tables are
+changed. The earlier forced 100% startup change is removed. Unexpected process
+failures restart after five seconds.
 AS7726 accepts both its vendor plugin's uppercase `EXHAUST`/`INTAKE` values
 and standard lowercase API values, selecting its existing distinct airflow
 policy; unknown direction also selects full speed.
@@ -136,12 +139,29 @@ unchanged. AS5835 and AS7816 receive no clock-ordering changes.
 
 ## Verification and remaining hardware checks
 
-The regression fixture applies all ten 202605 patches to pinned upstream,
+The regression fixture applies all fifteen 202605 patches to pinned upstream,
 including adding a module inside an initialized submodule, then checks reverse
 recognition and Python compilation. It executes the patched API/monitor methods
 with simulated sensor failures and Linux watchdog sysfs/ioctls. It compares SDK
 values against the actual pinned Edgecore profiles and checks that unrelated SDK
 properties, PDDF sensor inventory and register values are unchanged.
+
+The complete platform backport follows fork commit
+`2d7307eed68a21ce1b4a05461a7cd2b0c6e9a50d`, with the shared watchdog helper
+from platform-common commit `1c8e439f9f14ef04dd05fa62d79e635c215d24d6`.
+It retains 202605's dependency versions and string-based PDDF fan conversions.
+The parity fixture checks all 36 resulting implementation files, and startup
+regressions compare the original monitor entry points. The PSU and CPU tests
+include a compiled regression for the shared `ym2651y` voltage decoder.
+
+Patch `0014` completes AS7726 monitoring: PSU voltage limits use the existing
+manufacturer registers, temperature warnings use PMBus `OT_WARN_LIMIT` (0x51),
+and CPU package/core sensors read kernel hwmon values and thresholds. Patch
+`0015` completes AS5835 monitoring: voltage limits follow each supported PSU's
+VOUT_MODE format, CPU sensors use kernel hwmon, and only unsupported PSU fan
+target comparisons are excluded. Neither model fabricates a fan target from
+its measured speed. AS5835's shared PSU driver change also affects other users
+of `ym2651y`; its numeric decoding is covered by the compiled regression.
 
 Run:
 
@@ -150,8 +170,10 @@ python3 -m unittest discover -s tests -v
 python3 tests/edgecore_platform_integration.py
 ```
 
-Only AS7326 has been inspected live. The new platform patches have not been
-installed on any switch. On each family, and both listed airflow variants:
+AS7326 and AS7726 fixes have been exercised on hardware during development;
+AS5835 changes use legacy hardware observations and software regressions.
+This reconciled 202605 patch series has not yet been built into a full image.
+On each family, and both listed airflow variants:
 
 1. Install the resulting Broadcom image and verify platform/HwSKU selection.
 2. Check `systemctl --failed`, monitor service uptime, `show environment`,

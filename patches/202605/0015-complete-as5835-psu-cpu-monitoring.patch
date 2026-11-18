@@ -1,0 +1,256 @@
+Subject: [202605] Correct AS5835 PSU decoding and expose CPU thermals
+
+Route manufacturer voltage limits through the shared model-aware ym2651y
+voltage decoder. Preserve chassis PWM targets; report unsupported PSU fan
+targets explicitly and narrowly exclude their comparisons. Append discovered
+coretemp package/core sensors without hardcoded temperatures or core numbers.
+
+Backported from ITJamie/sonic-buildimage accton-fixes at 2d7307eed68a21ce1b4a05461a7cd2b0c6e9a50d.
+Shared watchdog helper: sonic-platform-common 1c8e439f9f14ef04dd05fa62d79e635c215d24d6.
+Verified 202605 source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Upstream PRs: https://github.com/sonic-net/sonic-buildimage/pull/30780
+https://github.com/sonic-net/sonic-platform-common/pull/808
+Remove when the target branch provides equivalent fixes.
+
+diff --git a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
+index 3e982c3..72421ec 100644
+--- a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
++++ b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
+@@ -77,10 +77,11 @@ class Chassis(ChassisBase):
+             self._psu_list.append(psu)
+     
+     def __initialize_thermals(self):
+-        from sonic_platform.thermal import Thermal
++        from sonic_platform.thermal import Thermal, CpuThermal
+         for index in range(0, NUM_THERMAL):
+             thermal = Thermal(index)
+             self._thermal_list.append(thermal)
++        self._thermal_list.extend(CpuThermal.discover(len(self._thermal_list)))
+     
+     def __initialize_eeprom(self):
+         from sonic_platform.eeprom import Tlv
+diff --git a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/fan.py b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/fan.py
+index 8cb1c17..aede77d 100644
+--- a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/fan.py
++++ b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/fan.py
+@@ -131,18 +131,9 @@ class Fan(FanBase):
+         return int(speed)
+ 
+     def get_target_speed(self):
+-        """
+-        Retrieves the target (expected) speed of the fan
+-        Returns:
+-            An integer, the percentage of full fan speed, in the range 0 (off)
+-                 to 100 (full speed)
+-
+-        Note:
+-            speed_pc = pwm_target/255*100
+-
+-            0   : when PWM mode is use
+-            pwm : when pwm mode is not use
+-        """
++        """Return chassis PWM; PSU firmware exposes no independent target."""
++        if self.is_psu_fan:
++            raise NotImplementedError("PSU fan target speed is not available")
+         return self.get_speed()
+ 
+     def get_speed_tolerance(self):
+diff --git a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/thermal.py b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/thermal.py
+index 4d06ad1..75761f4 100644
+--- a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/thermal.py
++++ b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/thermal.py
+@@ -9,6 +9,8 @@
+ import os
+ import os.path
+ import glob
++from pathlib import Path
++import re
+ 
+ try:
+     from sonic_platform_base.thermal_base import ThermalBase
+@@ -233,3 +235,133 @@ class Thermal(ThermalBase):
+             A boolean value, True if replaceable, False if not
+         """
+         return False
++
++
++class CpuThermal(ThermalBase):
++    """Read coretemp sensors without depending on hwmon enumeration order.
++
++    CPU sensors are appended to the existing board inventory. Discovery
++    and reads never write sysfs; missing or invalid values remain unavailable.
++    """
++
++    HWMON_ROOT = Path("/sys/devices/platform/coretemp.0/hwmon")
++
++    def __init__(self, label, name, position, hwmon_root=None):
++        self.label = label
++        self.name = name
++        self.position = position
++        self.hwmon_root = (
++            Path(hwmon_root) if hwmon_root is not None else self.HWMON_ROOT
++        )
++
++    @staticmethod
++    def _text(path):
++        try:
++            return path.read_text().strip()
++        except (OSError, UnicodeError):
++            return None
++
++    @classmethod
++    def _channels(cls, root):
++        try:
++            for hwmon in sorted(root.glob("hwmon*")):
++                if cls._text(hwmon / "name") != "coretemp":
++                    continue
++                for path in hwmon.glob("temp*_label"):
++                    match = re.fullmatch(r"temp([0-9]+)_label", path.name)
++                    label = cls._text(path)
++                    if match and label:
++                        yield int(match[1]), label, hwmon
++        except OSError:
++            # An optional CPU sensor must not prevent board inventory startup.
++            return
++
++    @classmethod
++    def discover(cls, position_offset, hwmon_root=None):
++        root = Path(hwmon_root) if hwmon_root is not None else cls.HWMON_ROOT
++        sensors = []
++        seen = set()
++        for channel, label, _ in sorted(cls._channels(root), key=lambda item: item[0]):
++            match = re.fullmatch(r"(Package id|Core) ([0-9]+)", label)
++            if not match or label in seen:
++                continue
++            kind, number = match.groups()
++            if kind == "Core":
++                name = "CPU_Core_{}_temp".format(number)
++            else:
++                name = (
++                    "CPU_Package_temp"
++                    if number == "0"
++                    else "CPU_Package_{}_temp".format(number)
++                )
++            sensors.append(cls(label, name, position_offset + len(sensors) + 1, root))
++            seen.add(label)
++        return sensors
++
++    def _path(self, suffix):
++        # Resolve again so a driver reload or changed hwmon number cannot leave
++        # the reader attached to an old path or a different sensor.
++        for channel, label, hwmon in self._channels(self.hwmon_root):
++            if label == self.label:
++                return hwmon / "temp{}_{}".format(channel, suffix)
++        return None
++
++    def _reading(self, suffix):
++        path = self._path(suffix)
++        text = self._text(path) if path is not None else None
++        try:
++            return int(text) / 1000.0
++        except (TypeError, ValueError, OverflowError):
++            return None
++
++    def get_name(self):
++        return self.name
++
++    def get_temperature(self):
++        return self._reading("input")
++
++    def get_high_threshold(self):
++        return self._reading("max")
++
++    def get_high_critical_threshold(self):
++        return self._reading("crit")
++
++    def get_presence(self):
++        path = self._path("input")
++        return path is not None and path.is_file()
++
++    def get_status(self):
++        return self.get_temperature() is not None
++
++    def get_position_in_parent(self):
++        return self.position
++
++    def is_replaceable(self):
++        return False
++
++    def get_model(self):
++        return "N/A"
++
++    def get_serial(self):
++        return "N/A"
++
++    def get_temp_label(self):
++        return self.name
++
++    def get_low_threshold(self):
++        return None
++
++    def get_low_critical_threshold(self):
++        return None
++
++    def set_high_threshold(self, temperature):
++        return False
++
++    def set_high_critical_threshold(self, temperature):
++        return False
++
++    def set_low_threshold(self, temperature):
++        return False
++
++    def set_low_critical_threshold(self, temperature):
++        return False
+diff --git a/device/accton/x86_64-accton_as5835_54x-r0/system_health_monitoring_config.json b/device/accton/x86_64-accton_as5835_54x-r0/system_health_monitoring_config.json
+index 5f3b3b0..5d6b275 100644
+--- a/device/accton/x86_64-accton_as5835_54x-r0/system_health_monitoring_config.json
++++ b/device/accton/x86_64-accton_as5835_54x-r0/system_health_monitoring_config.json
+@@ -1,15 +1,17 @@
+-{
+-    "services_to_ignore": [],
+-    "devices_to_ignore": [
+-        "asic",
+-	    "psu.temperature"
+-	    
+-    ],
+-    "user_defined_checkers": [],
+-    "polling_interval": 60,
+-    "led_color": {
+-        "fault": "STATUS_LED_COLOR_AMBER",
+-        "normal": "STATUS_LED_COLOR_GREEN",
+-        "booting": "STATUS_LED_COLOR_GREEN"
+-    }
+-}
++{
++    "services_to_ignore": [],
++    "devices_to_ignore": [
++        "asic",
++	    "psu.temperature",
++	    "PSU-1 FAN-1.speed",
++	    "PSU-2 FAN-1.speed"
++
++    ],
++    "user_defined_checkers": [],
++    "polling_interval": 60,
++    "led_color": {
++        "fault": "STATUS_LED_COLOR_AMBER",
++        "normal": "STATUS_LED_COLOR_GREEN",
++        "booting": "STATUS_LED_COLOR_GREEN"
++    }
++}
+diff --git a/platform/broadcom/sonic-platform-modules-accton/common/modules/ym2651y.c b/platform/broadcom/sonic-platform-modules-accton/common/modules/ym2651y.c
+index 9b66f5d..0579026 100644
+--- a/platform/broadcom/sonic-platform-modules-accton/common/modules/ym2651y.c
++++ b/platform/broadcom/sonic-platform-modules-accton/common/modules/ym2651y.c
+@@ -152,8 +152,8 @@ static SENSOR_DEVICE_ATTR(psu_mfr_revision,    S_IRUGO, show_ascii, NULL, PSU_MF
+ static SENSOR_DEVICE_ATTR(psu_mfr_serial,     S_IRUGO, show_ascii,  NULL, PSU_MFR_SERIAL);
+ static SENSOR_DEVICE_ATTR(psu_mfr_vin_min,    S_IRUGO, show_linear, NULL, PSU_MFR_VIN_MIN);
+ static SENSOR_DEVICE_ATTR(psu_mfr_vin_max,    S_IRUGO, show_linear, NULL, PSU_MFR_VIN_MAX);
+-static SENSOR_DEVICE_ATTR(psu_mfr_vout_min,   S_IRUGO, show_linear, NULL, PSU_MFR_VOUT_MIN);
+-static SENSOR_DEVICE_ATTR(psu_mfr_vout_max,   S_IRUGO, show_linear, NULL, PSU_MFR_VOUT_MAX);
++static SENSOR_DEVICE_ATTR(psu_mfr_vout_min,   S_IRUGO, show_vout, NULL, PSU_MFR_VOUT_MIN);
++static SENSOR_DEVICE_ATTR(psu_mfr_vout_max,   S_IRUGO, show_vout, NULL, PSU_MFR_VOUT_MAX);
+ static SENSOR_DEVICE_ATTR(psu_mfr_iin_max,   S_IRUGO, show_linear, NULL, PSU_MFR_IIN_MAX);
+ static SENSOR_DEVICE_ATTR(psu_mfr_iout_max,   S_IRUGO, show_linear, NULL, PSU_MFR_IOUT_MAX);
+ static SENSOR_DEVICE_ATTR(psu_mfr_pin_max,   S_IRUGO, show_linear, NULL, PSU_MFR_PIN_MAX);

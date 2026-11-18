@@ -1,25 +1,21 @@
-Subject: [202605] Keep Edgecore thermal control alive through missing sensor reads
+Subject: [202605] Recover Edgecore thermal control while preserving startup speeds
 
-AS7326 boot logs show None * 1000 killing the fan loop after its initial
-38 percent setting. Apply explicit missing/nonfinite sensor handling to
-AS7326, AS7726 and AS7816 PDDF loops and AS5835 native fan control.
-Keep global fan PWM at 100 percent while a required reading is unavailable,
-retry in the existing loop, then resume each model's existing thermal
-policy. Start PDDF loops at full speed until valid readings are available.
-Restart unexpected service failures instead of leaving control dead.
-AS7726 accepts both vendor uppercase and standard lowercase direction
-strings, retaining its distinct airflow policies; no thresholds change.
-Reference: Edgecore thermal implementations at d39662e9; these still
-have unguarded sensor reads, so this is a local recovery fix.
+Use full fan speed for unavailable/nonfinite readings and resume the
+original model policy after recovery. Preserve the original startup speed
+and restart unexpected monitor failures. Sensor thresholds are unchanged.
 
-Verified source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
-Remove individual fixes when upstream supplies equivalent behavior.
-Software regressions cover these changes; only AS7326 has been
-inspected live. Other models require installation/hardware validation.
+Backported from ITJamie/sonic-buildimage accton-fixes at 2d7307eed68a21ce1b4a05461a7cd2b0c6e9a50d.
+Shared watchdog helper: sonic-platform-common 1c8e439f9f14ef04dd05fa62d79e635c215d24d6.
+Verified 202605 source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Upstream PRs: https://github.com/sonic-net/sonic-buildimage/pull/30780
+https://github.com/sonic-net/sonic-platform-common/pull/808
+Remove when the target branch provides equivalent fixes.
 
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as5835-54x/service/as5835-54x-platform-monitor.service b/platform/broadcom/sonic-platform-modules-accton/as5835-54x/service/as5835-54x-platform-monitor.service
+index d522a0c..de353b8 100644
 --- a/platform/broadcom/sonic-platform-modules-accton/as5835-54x/service/as5835-54x-platform-monitor.service
 +++ b/platform/broadcom/sonic-platform-modules-accton/as5835-54x/service/as5835-54x-platform-monitor.service
-@@ -5,6 +5,8 @@
+@@ -5,6 +5,8 @@ After=sysinit.target
  DefaultDependencies=no
  
  [Service]
@@ -28,6 +24,8 @@ inspected live. Other models require installation/hardware validation.
  ExecStartPre=/usr/local/bin/accton_as5835_54x_util.py install
  ExecStart=/usr/local/bin/accton_as5835_54x_monitor.py
  KillSignal=SIGKILL
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as5835-54x/utils/accton_as5835_54x_monitor.py b/platform/broadcom/sonic-platform-modules-accton/as5835-54x/utils/accton_as5835_54x_monitor.py
+index 49a12cd..f79af92 100644
 --- a/platform/broadcom/sonic-platform-modules-accton/as5835-54x/utils/accton_as5835_54x_monitor.py
 +++ b/platform/broadcom/sonic-platform-modules-accton/as5835-54x/utils/accton_as5835_54x_monitor.py
 @@ -26,6 +26,7 @@
@@ -38,7 +36,7 @@ inspected live. Other models require installation/hardware validation.
      import logging
      import logging.config
      import time  # this is only being used as part of the example
-@@ -91,19 +92,33 @@
+@@ -91,19 +92,33 @@ class accton_as5835_54x_monitor(object):
          thermal = ThermalUtil()
          fan = FanUtil()
  
@@ -77,9 +75,11 @@ inspected live. Other models require installation/hardware validation.
                  return False
              if fan_stat is False:
                  self._new_perc = FAN_LEV1_SPEED_PERC
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/service/as7326-56x-pddf-platform-monitor.service b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/service/as7326-56x-pddf-platform-monitor.service
+index 0335182..959eec1 100644
 --- a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/service/as7326-56x-pddf-platform-monitor.service
 +++ b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/service/as7326-56x-pddf-platform-monitor.service
-@@ -5,6 +5,8 @@
+@@ -5,6 +5,8 @@ After=pddf-platform-init.service
  DefaultDependencies=no
  
  [Service]
@@ -88,6 +88,8 @@ inspected live. Other models require installation/hardware validation.
  ExecStart=/usr/local/bin/accton_as7326_pddf_monitor.py
  KillSignal=SIGKILL
  SuccessExitStatus=SIGKILL
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/utils/accton_as7326_pddf_monitor.py b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/utils/accton_as7326_pddf_monitor.py
+index 7f3add4..0086d2d 100644
 --- a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/utils/accton_as7326_pddf_monitor.py
 +++ b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/utils/accton_as7326_pddf_monitor.py
 @@ -23,6 +23,7 @@
@@ -98,13 +100,11 @@ inspected live. Other models require installation/hardware validation.
      import getopt
      import logging
      import subprocess
-@@ -63,6 +64,19 @@
+@@ -62,9 +63,19 @@ test_temp_list = [0, 0]
+ temp_test_data = 0
  test_temp_revert = 0
  
- # Make a class we can use to capture stdout and sterr in the log
-+
-+
-+
+-# Make a class we can use to capture stdout and sterr in the log
 +def read_temperature_milli(index):
 +    """Return a finite sensor reading, or None while unavailable."""
 +    try:
@@ -117,8 +117,11 @@ inspected live. Other models require installation/hardware validation.
 +        return None
  
  
++# Make a class we can use to capture stdout and stderr in the log
  class device_monitor(object):
-@@ -147,8 +161,12 @@
+     # static temp var
+     temp = 0
+@@ -147,8 +158,12 @@ class device_monitor(object):
          ori_perc = platform_chassis.get_fan(0).get_speed()
          #logging.debug('test_temp=%d', test_temp)
          if test_temp == 0:
@@ -133,22 +136,11 @@ inspected live. Other models require installation/hardware validation.
          else:
              temp2 = test_temp_list[0]
              temp4 = test_temp_list[1]
-@@ -295,9 +313,9 @@
-     global platform_chassis
-     platform_chassis = platform.Platform().get_chassis()
- 
--    platform_chassis.get_fan(0).set_speed(38)
--
--    print("set default fan speed to 37.5%")
-+    platform_chassis.get_fan(0).set_speed(100)
-+
-+    print("set startup fan speed to 100% until sensors are ready")
-     monitor = device_monitor(log_file, log_level)
- 
-     while True:
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/service/as7726-32x-pddf-platform-monitor.service b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/service/as7726-32x-pddf-platform-monitor.service
+index a4aa842..9d24c74 100644
 --- a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/service/as7726-32x-pddf-platform-monitor.service
 +++ b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/service/as7726-32x-pddf-platform-monitor.service
-@@ -5,6 +5,8 @@
+@@ -5,6 +5,8 @@ After=pddf-platform-init.service
  DefaultDependencies=no
  
  [Service]
@@ -157,6 +149,8 @@ inspected live. Other models require installation/hardware validation.
  ExecStart=/usr/local/bin/accton_as7726_32x_pddf_monitor.py
  KillSignal=SIGKILL
  SuccessExitStatus=SIGKILL
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/utils/accton_as7726_32x_pddf_monitor.py b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/utils/accton_as7726_32x_pddf_monitor.py
+index 2b18ac6..cfbed56 100644
 --- a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/utils/accton_as7726_32x_pddf_monitor.py
 +++ b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/utils/accton_as7726_32x_pddf_monitor.py
 @@ -25,6 +25,7 @@
@@ -167,7 +161,7 @@ inspected live. Other models require installation/hardware validation.
      import getopt
      import logging
      import subprocess
-@@ -60,6 +61,19 @@
+@@ -60,6 +61,19 @@ platform_chassis = None
  #  sensor_LM75_CPU == sensor_LM75_4B
   
       
@@ -187,7 +181,7 @@ inspected live. Other models require installation/hardware validation.
  class switch(object):
      def __init__(self, value):
          self.value = value
-@@ -162,7 +176,12 @@
+@@ -162,7 +176,12 @@ class device_monitor(object):
          }
          
          fan_dir= platform_chassis.get_fan(0).get_direction()
@@ -201,7 +195,7 @@ inspected live. Other models require installation/hardware validation.
              fan_policy = fan_policy_f2b
          else:
              fan_policy = fan_policy_b2f
-@@ -171,8 +190,12 @@
+@@ -171,8 +190,12 @@ class device_monitor(object):
          #ori_perc=fan.get_fan_duty_cycle()
          logging.debug('fan_dir=%s, ori_perc=%d, test_temp=%d', fan_dir, ori_perc, test_temp)
          if test_temp==0:
@@ -216,21 +210,11 @@ inspected live. Other models require installation/hardware validation.
          else:
              temp4 = test_temp_list[3]
              temp5 = test_temp_list[4]            
-@@ -306,9 +329,9 @@
-     global platform_chassis
-     platform_chassis = platform.Platform().get_chassis()
-     
--    platform_chassis.get_fan(0).set_speed(38)
-+    platform_chassis.get_fan(0).set_speed(100)
-   
--    print("set default fan speed to 37.5%")
-+    print("set startup fan speed to 100% until sensors are ready")
-     monitor = device_monitor(log_file, log_level)
-     # Loop forever, doing something useful hopefully:
-     while True:
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7816-64x/service/as7816-pddf-platform-monitor.service b/platform/broadcom/sonic-platform-modules-accton/as7816-64x/service/as7816-pddf-platform-monitor.service
+index 7b6db7d..9a1b404 100644
 --- a/platform/broadcom/sonic-platform-modules-accton/as7816-64x/service/as7816-pddf-platform-monitor.service
 +++ b/platform/broadcom/sonic-platform-modules-accton/as7816-64x/service/as7816-pddf-platform-monitor.service
-@@ -5,6 +5,8 @@
+@@ -5,6 +5,8 @@ After=pddf-platform-init.service
  DefaultDependencies=no
  
  [Service]
@@ -239,6 +223,8 @@ inspected live. Other models require installation/hardware validation.
  ExecStart=/usr/local/bin/accton_as7816_pddf_monitor.py
  KillSignal=SIGKILL
  SuccessExitStatus=SIGKILL
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7816-64x/utils/accton_as7816_pddf_monitor.py b/platform/broadcom/sonic-platform-modules-accton/as7816-64x/utils/accton_as7816_pddf_monitor.py
+index 8d64cc9..e1a4296 100644
 --- a/platform/broadcom/sonic-platform-modules-accton/as7816-64x/utils/accton_as7816_pddf_monitor.py
 +++ b/platform/broadcom/sonic-platform-modules-accton/as7816-64x/utils/accton_as7816_pddf_monitor.py
 @@ -25,6 +25,7 @@
@@ -249,7 +235,7 @@ inspected live. Other models require installation/hardware validation.
      import getopt
      import logging
      import logging.config
-@@ -48,6 +49,19 @@
+@@ -48,6 +49,19 @@ test_temp_revert = 0
  temp_test_data = 0
  
  
@@ -269,7 +255,7 @@ inspected live. Other models require installation/hardware validation.
  def get_thermal_avg_temp():
      global platform_chassis
      global test_temp_list
-@@ -58,7 +72,10 @@
+@@ -58,7 +72,10 @@ def get_thermal_avg_temp():
  
      if test_temp == 0:
          for x in range(THERMAL_NUM_ON_MAIN_BROAD):
@@ -281,7 +267,7 @@ inspected live. Other models require installation/hardware validation.
  
      else:
          for x in range(THERMAL_NUM_ON_MAIN_BROAD):
-@@ -141,6 +158,10 @@
+@@ -141,6 +158,10 @@ class accton_as7816_monitor(object):
  
          # Decide fan duty by if avg of sensors falls into any of fan_policy{}
          get_temp = get_thermal_avg_temp()
@@ -292,11 +278,3 @@ inspected live. Other models require installation/hardware validation.
  
          for x in range(0, len(fan_policy)):
              y = len(fan_policy) - x - 1  # checked from highest
-@@ -192,6 +213,7 @@
- 
-     global platform_chassis
-     platform_chassis = platform.Platform().get_chassis()
-+    platform_chassis.get_fan(0).set_speed(DUTY_MAX)
-     status, output = subprocess.getstatusoutput('i2cset -f -y 17 0x68 0x28 0x0')
-     if status:
-         print("Warning: Fan speed watchdog could not be disabled")

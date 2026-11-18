@@ -1,29 +1,25 @@
-Subject: [202605] Wire Edgecore hardware watchdogs without query side effects
+Subject: [202605] Wire Edgecore watchdog APIs to the reviewed Linux helper
 
-Add adapters for the native AS5835 API and PDDF AS7326/AS7726/AS7816.
-Use the common platform package (already required by all four APIs),
-rather than forcing native AS5835 into PDDF mode. Fix the missing syslog
-import exposed by missing platform adapters in PR #25049.
-Avoid the existing generic PDDF watchdog constructor: it opens/arms and
-disables hardware even for status, and an already inactive disarm fails.
-The new adapter discovers supported identities through sysfs, uses
-four-byte ioctl arguments and the driver-returned timeout, reads kernel
-state across processes, and treats repeated disarm as success. Explicit
-arm/disarm still require controlled hardware validation per model.
-References: https://github.com/sonic-net/sonic-buildimage/pull/25049
-https://docs.kernel.org/watchdog/watchdog-api.html
+Use the same query-safe Linux watchdog helper and model adapters as the
+upstream review series, including failure cleanup and idempotent disarm.
+No watchdog opens or hardware state changes occur during status queries.
 
-Verified source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
-Remove individual fixes when upstream supplies equivalent behavior.
-Software regressions cover these changes; only AS7326 has been
-inspected live. Other models require installation/hardware validation.
+Backported from ITJamie/sonic-buildimage accton-fixes at 2d7307eed68a21ce1b4a05461a7cd2b0c6e9a50d.
+Shared watchdog helper: sonic-platform-common 1c8e439f9f14ef04dd05fa62d79e635c215d24d6.
+Verified 202605 source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Upstream PRs: https://github.com/sonic-net/sonic-buildimage/pull/30780
+https://github.com/sonic-net/sonic-platform-common/pull/808
+Remove when the target branch provides equivalent fixes.
 
+diff --git a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
+index c4a062f..3e982c3 100644
 --- a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
 +++ b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
-@@ -252,3 +252,10 @@
+@@ -251,4 +251,10 @@ class Chassis(ChassisBase):
+             return False
          else:
              return self._api_helper.write_txt_file(SYSLED_FNODE, mode)
-             
+-            
 +
 +
 +    def get_watchdog(self):
@@ -31,6 +27,9 @@ inspected live. Other models require installation/hardware validation.
 +            from sonic_platform.watchdog import Watchdog
 +            self._watchdog = Watchdog()
 +        return self._watchdog
+diff --git a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/watchdog.py b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/watchdog.py
+new file mode 100644
+index 0000000..f4fe009
 --- /dev/null
 +++ b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/watchdog.py
 @@ -0,0 +1,7 @@
@@ -41,6 +40,9 @@ inspected live. Other models require installation/hardware validation.
 +
 +class Watchdog(LinuxWatchdog):
 +    pass
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/watchdog.py b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/watchdog.py
+new file mode 100644
+index 0000000..f4fe009
 --- /dev/null
 +++ b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/watchdog.py
 @@ -0,0 +1,7 @@
@@ -51,6 +53,8 @@ inspected live. Other models require installation/hardware validation.
 +
 +class Watchdog(LinuxWatchdog):
 +    pass
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/watchdog.py b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/watchdog.py
+index 88660b1..73c0f36 100644
 --- a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/watchdog.py
 +++ b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/watchdog.py
 @@ -7,17 +7,17 @@
@@ -74,6 +78,9 @@ inspected live. Other models require installation/hardware validation.
          self.timeout= 180
  
      # Provide the functions/variables below for which implementation is to be overwritten
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7816-64x/sonic_platform/watchdog.py b/platform/broadcom/sonic-platform-modules-accton/as7816-64x/sonic_platform/watchdog.py
+new file mode 100644
+index 0000000..f4fe009
 --- /dev/null
 +++ b/platform/broadcom/sonic-platform-modules-accton/as7816-64x/sonic_platform/watchdog.py
 @@ -0,0 +1,7 @@
@@ -84,6 +91,8 @@ inspected live. Other models require installation/hardware validation.
 +
 +class Watchdog(LinuxWatchdog):
 +    pass
+diff --git a/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_chassis.py b/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_chassis.py
+index f0d8274..46ea2aa 100644
 --- a/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_chassis.py
 +++ b/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_chassis.py
 @@ -7,6 +7,7 @@
@@ -94,6 +103,9 @@ inspected live. Other models require installation/hardware validation.
      from sonic_platform_base.chassis_base import ChassisBase
      from sonic_platform.sfp import Sfp
      from sonic_platform.psu import Psu
+diff --git a/src/sonic-platform-common/sonic_platform_base/linux_watchdog.py b/src/sonic-platform-common/sonic_platform_base/linux_watchdog.py
+new file mode 100644
+index 0000000..603afc2
 --- /dev/null
 +++ b/src/sonic-platform-common/sonic_platform_base/linux_watchdog.py
 @@ -0,0 +1,106 @@
@@ -203,6 +215,8 @@ inspected live. Other models require installation/hardware validation.
 +            self._close()
 +        except OSError:
 +            pass
+diff --git a/src/sonic-platform-common/sonic_platform_base/watchdog_base.py b/src/sonic-platform-common/sonic_platform_base/watchdog_base.py
+index 20ce7ab..09393a9 100644
 --- a/src/sonic-platform-common/sonic_platform_base/watchdog_base.py
 +++ b/src/sonic-platform-common/sonic_platform_base/watchdog_base.py
 @@ -3,6 +3,8 @@

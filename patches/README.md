@@ -116,7 +116,8 @@ are recorded under `compatibility_fixes`.
   queries do not open/arm hardware. Fix the PDDF missing `syslog` import.
 - `202605/0009-recover-edgecore-thermal-monitor.patch`: use full fan speed while
   sensor readings are unavailable, retry and recover the existing thermal policy,
-  and restart unexpected monitor failures. Preserve native AS5835 and PDDF mode
+  and restart unexpected monitor failures. Preserve the original startup speeds,
+  native AS5835 and PDDF mode
   selection; correct AS7726 airflow comparison without changing thresholds.
 - `202605/0010-order-edgecore-idt-before-pddf.patch`: order AS7326 and AS7726
   IDT clock initialization before PDDF binds their muxes, following upstream
@@ -135,6 +136,26 @@ are recorded under `compatibility_fixes`.
   decoder. Other airflow labels and direction checks remain intact. With these
   two patches and `0011`, the test switch reports Services/Hardware OK and a
   green status LED. No image build or reboot test has been performed yet.
+
+- `202605/0014-complete-as7726-psu-cpu-monitoring.patch`: complete AS7726
+  PMBus voltage limits, hardware temperature warning limits (`OT_WARN_LIMIT`,
+  register `0x51`), the observed FSF019 `F2B*` airflow label, and CPU package/core
+  monitoring. Only unsupported PSU fan target comparisons are excluded; PSU
+  temperature monitoring remains enabled. The health configuration in `0006`
+  includes the final exclusions to keep reapplication detection reliable.
+- `202605/0015-complete-as5835-psu-cpu-monitoring.patch`: correct manufacturer
+  voltage-limit decoding in the shared `ym2651y` driver, retain chassis fan PWM
+  targets while explicitly reporting unsupported PSU fan targets, and add CPU
+  thermals using kernel labels/thresholds. Only the two PSU target comparisons
+  are excluded from health checking.
+
+The 202605 series is reconciled with `accton-fixes` at
+`2d7307eed68a21ce1b4a05461a7cd2b0c6e9a50d` and the shared Linux watchdog helper
+at `1c8e439f9f14ef04dd05fa62d79e635c215d24d6`. It preserves 202605's pinned SAI
+dependencies and fan conversion format. No master SAI-header update is included.
+`tests/fixtures/accton-202605-parity.json` records the 36 implementation files;
+integration tests apply/reapply all 15 patches, verify parity and original fan
+startup code, and run the reviewed PSU/CPU regressions on the patched source.
 
 The four-family support matrix, exact scope, source pins and required hardware
 checks are in [Edgecore platform support](../docs/edgecore-platform-support.md).

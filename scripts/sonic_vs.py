@@ -268,7 +268,10 @@ def apply_branch_patches(source, work, branch, patch_root=None):
                 raise
             entry["status"] = "applied"
         else:
-            reverse = subprocess.run([*command, "--reverse", "--check", str(path.resolve())],
+            # Recognition is read-only. A reverse patch may restore whitespace
+            # from the original upstream file; keep strict checks for writes.
+            reverse = subprocess.run(["git", "-C", str(source), "apply", "--reverse", "--check",
+                                      "--whitespace=nowarn", str(path.resolve())],
                                      text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             if reverse.returncode != 0:
                 entry["status"] = "failed"

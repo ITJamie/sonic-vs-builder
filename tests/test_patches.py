@@ -65,6 +65,19 @@ class BranchPatches(unittest.TestCase):
         self.assertEqual(self.apply()[0]["status"], "already-applied")
         self.assertIn("branch patches:", self.template.read_text())
 
+    def test_recognition_can_restore_original_whitespace_without_writing_it(self):
+        self.target.write_text("old   \n")
+        self.add_patch("0001.patch", "old   \n", "fixed\n")
+        self.assertEqual(self.apply()[0]["status"], "applied")
+        self.assertEqual(self.apply()[0]["status"], "already-applied")
+        self.assertEqual(self.target.read_text(), "fixed\n")
+
+    def test_new_trailing_whitespace_still_fails_before_application(self):
+        self.add_patch("0001.patch", "old\n", "fixed   \n")
+        with self.assertRaisesRegex(ValueError, "no longer applies"):
+            self.apply()
+        self.assertEqual(self.target.read_text(), "old\n")
+
     def test_patch_can_modify_initialized_submodule_files(self):
         submodule = self.source / "src/example"
         submodule.mkdir(parents=True)

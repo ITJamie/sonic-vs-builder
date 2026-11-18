@@ -1,18 +1,18 @@
-Subject: [202605] Restore Edgecore PDDF health and LED APIs
+Subject: [202605] Restore Edgecore PDDF health and status LED APIs
 
-Port the minimal chassis LED methods and matching lowercase LED labels
-from Edgecore AS7326/AS7726 (d39662e996c0e8748c9b96ad88dc5f5f524e8048),
-also repairing the same PDDF gap on AS7816. AS5835 uses a native API
-whose existing LED methods/configuration are retained. Preserve sensor
-inventory, I2C registers, airflow handling and health ignore lists.
-References: https://github.com/sonic-net/sonic-buildimage/pull/13809
-https://github.com/sonic-net/sonic-buildimage/pull/23737
+Backport the reviewed health LED methods and matching PDDF labels for
+AS7326, AS7726 and AS7816. Preserve native AS5835 LED behavior and hardware
+register values. AS7726 CPU inventory follows in patch 0014.
 
-Verified source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
-Remove individual fixes when upstream supplies equivalent behavior.
-Software regressions cover these changes; only AS7326 has been
-inspected live. Other models require installation/hardware validation.
+Backported from ITJamie/sonic-buildimage accton-fixes at 2d7307eed68a21ce1b4a05461a7cd2b0c6e9a50d.
+Shared watchdog helper: sonic-platform-common 1c8e439f9f14ef04dd05fa62d79e635c215d24d6.
+Verified 202605 source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Upstream PRs: https://github.com/sonic-net/sonic-buildimage/pull/30780
+https://github.com/sonic-net/sonic-platform-common/pull/808
+Remove when the target branch provides equivalent fixes.
 
+diff --git a/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json b/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json
+index 857b4e1..8311def 100644
 --- a/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json
 +++ b/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json
 @@ -2916,13 +2916,13 @@
@@ -57,6 +57,8 @@ inspected live. Other models require installation/hardware validation.
                  
               ]
          }
+diff --git a/device/accton/x86_64-accton_as7326_56x-r0/system_health_monitoring_config.json b/device/accton/x86_64-accton_as7326_56x-r0/system_health_monitoring_config.json
+index 18d47b2..ec6dfd7 100644
 --- a/device/accton/x86_64-accton_as7326_56x-r0/system_health_monitoring_config.json
 +++ b/device/accton/x86_64-accton_as7326_56x-r0/system_health_monitoring_config.json
 @@ -8,8 +8,8 @@
@@ -71,6 +73,8 @@ inspected live. Other models require installation/hardware validation.
 +        "booting": "green_blink"
      }
  }
+diff --git a/device/accton/x86_64-accton_as7726_32x-r0/pddf/pddf-device.json b/device/accton/x86_64-accton_as7726_32x-r0/pddf/pddf-device.json
+index b73f22b..04a79f3 100644
 --- a/device/accton/x86_64-accton_as7726_32x-r0/pddf/pddf-device.json
 +++ b/device/accton/x86_64-accton_as7726_32x-r0/pddf/pddf-device.json
 @@ -1894,8 +1894,8 @@
@@ -97,13 +101,18 @@ inspected live. Other models require installation/hardware validation.
  				]
  			}
  
+diff --git a/device/accton/x86_64-accton_as7726_32x-r0/system_health_monitoring_config.json b/device/accton/x86_64-accton_as7726_32x-r0/system_health_monitoring_config.json
+new file mode 100644
+index 0000000..eb356e2
 --- /dev/null
 +++ b/device/accton/x86_64-accton_as7726_32x-r0/system_health_monitoring_config.json
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,15 @@
 +{
 +    "services_to_ignore": [],
 +    "devices_to_ignore": [
-+        "asic"
++        "asic",
++        "PSU1_FAN1.speed",
++        "PSU2_FAN1.speed"
 +    ],
 +    "user_defined_checkers": [],
 +    "polling_interval": 60,
@@ -113,6 +122,8 @@ inspected live. Other models require installation/hardware validation.
 +        "booting": "off"
 +    }
 +}
+diff --git a/device/accton/x86_64-accton_as7816_64x-r0/pddf/pddf-device.json b/device/accton/x86_64-accton_as7816_64x-r0/pddf/pddf-device.json
+index f373f39..361de7f 100644
 --- a/device/accton/x86_64-accton_as7816_64x-r0/pddf/pddf-device.json
 +++ b/device/accton/x86_64-accton_as7816_64x-r0/pddf/pddf-device.json
 @@ -3182,8 +3182,8 @@
@@ -139,6 +150,8 @@ inspected live. Other models require installation/hardware validation.
  				]
  			}
  
+diff --git a/device/accton/x86_64-accton_as7816_64x-r0/system_health_monitoring_config.json b/device/accton/x86_64-accton_as7816_64x-r0/system_health_monitoring_config.json
+index 92be29d..3ab510f 100644
 --- a/device/accton/x86_64-accton_as7816_64x-r0/system_health_monitoring_config.json
 +++ b/device/accton/x86_64-accton_as7816_64x-r0/system_health_monitoring_config.json
 @@ -8,8 +8,8 @@
@@ -153,13 +166,14 @@ inspected live. Other models require installation/hardware validation.
 +        "booting": "green"
      }
  }
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/chassis.py b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/chassis.py
+index feb1fbd..9d4c6ff 100644
 --- a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/chassis.py
 +++ b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/chassis.py
-@@ -83,3 +83,14 @@
+@@ -83,3 +83,13 @@ class Chassis(PddfChassis):
              sys.stderr.write("SFP index {} out of range (1-{})\n".format(
                               index, len(self._sfp_list)))
          return sfp
-+
 +
 +    # Keep the legacy spelling used by show/system_health.py.
 +    def initizalize_system_led(self):
@@ -170,13 +184,14 @@ inspected live. Other models require installation/hardware validation.
 +
 +    def set_status_led(self, color):
 +        return self.set_system_led("DIAG_LED", color)
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/chassis.py b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/chassis.py
+index 8ff20a7..1a5abf0 100644
 --- a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/chassis.py
 +++ b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/chassis.py
-@@ -84,3 +84,14 @@
+@@ -84,3 +84,13 @@ class Chassis(PddfChassis):
              sys.stderr.write("SFP index {} out of range (1-{})\n".format(
                               index, len(self._sfp_list)))
          return sfp
-+
 +
 +    # Keep the legacy spelling used by show/system_health.py.
 +    def initizalize_system_led(self):
@@ -187,13 +202,14 @@ inspected live. Other models require installation/hardware validation.
 +
 +    def set_status_led(self, color):
 +        return self.set_system_led("DIAG_LED", color)
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7816-64x/sonic_platform/chassis.py b/platform/broadcom/sonic-platform-modules-accton/as7816-64x/sonic_platform/chassis.py
+index c597c0d..8fa1b37 100644
 --- a/platform/broadcom/sonic-platform-modules-accton/as7816-64x/sonic_platform/chassis.py
 +++ b/platform/broadcom/sonic-platform-modules-accton/as7816-64x/sonic_platform/chassis.py
-@@ -84,3 +84,14 @@
+@@ -84,3 +84,13 @@ class Chassis(PddfChassis):
              sys.stderr.write("SFP index {} out of range (1-{})\n".format(
                               index, len(self._sfp_list)))
          return sfp
-+
 +
 +    # Keep the legacy spelling used by show/system_health.py.
 +    def initizalize_system_led(self):

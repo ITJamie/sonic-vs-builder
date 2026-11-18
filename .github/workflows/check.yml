@@ -32,7 +32,7 @@ jobs:
         run: |
           docker run --rm --mount "type=bind,source=$PWD,target=/repo,readonly" \
             --workdir /repo python:3.13-slim-trixie \
-            sh -ec 'apt-get update -qq && apt-get install -y --no-install-recommends git ca-certificates >/dev/null && python tests/edgecore_platform_integration.py'
+            sh -ec 'apt-get update -qq && apt-get install -y --no-install-recommends git ca-certificates gcc libc6-dev >/dev/null && python tests/edgecore_platform_integration.py'
       - name: Native image and release naming across supported branches
         run: |
           python3 -m venv "$RUNNER_TEMP/image-version-venv"

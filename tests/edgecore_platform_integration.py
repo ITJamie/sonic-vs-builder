@@ -7,6 +7,7 @@ downloads during development. All device operations are substituted by fakes.
 import array
 import ast
 import importlib.util
+import hashlib
 import json
 import logging
 import math
@@ -73,18 +74,23 @@ class EdgecorePlatform(unittest.TestCase):
             self.assertEqual({k: v for k, v in before.items() if k not in excluded},
                              {k: v for k, v in after.items() if k not in excluded})
 
-    def test_pddf_changes_preserve_existing_sensors_and_add_as7326_voltage_limits(self):
+    def test_pddf_changes_preserve_sensors_and_add_psu_hardware_limits(self):
         for model in MODELS[1:]:
             path = DEVICE + model + "-r0/pddf/pddf-device.json"
             before, after = json.loads(ORIGINALS[path]), json.loads((SOURCE / path).read_text())
-            if model == "as7326_56x":
-                for key, address in (("PSU1-PMBUS", "0x59"), ("PSU2-PMBUS", "0x5b")):
+            if model in ("as7326_56x", "as7726_32x"):
+                devices = (("PSU1-PMBUS", "0x59"), ("PSU2-PMBUS", "0x5b")) if model == "as7326_56x" else (
+                    ("PSU1-PMBUS", "0x5b"), ("PSU2-PMBUS", "0x58"))
+                for key, address in devices:
                     attrs = after[key]["i2c"]["attr_list"]
-                    limits = [a for a in attrs if a["attr_name"] in {"psu_v_out_min", "psu_v_out_max"}]
+                    definitions = [("psu_v_out_min", "0xa4"), ("psu_v_out_max", "0xa5")]
+                    if model == "as7726_32x":
+                        definitions.append(("psu_temp1_high_threshold", "0x51"))
+                    limits = [a for a in attrs if a["attr_name"] in dict(definitions)]
                     self.assertEqual(limits, [
                         {"attr_name": name, "attr_devaddr": address, "attr_devtype": "pmbus",
                          "attr_offset": offset, "attr_mask": "0x0", "attr_cmpval": "0xff", "attr_len": "2"}
-                        for name, offset in (("psu_v_out_min", "0xa4"), ("psu_v_out_max", "0xa5"))])
+                        for name, offset in definitions])
                     after[key]["i2c"]["attr_list"] = [a for a in attrs if a not in limits]
             for name, device in after.items():
                 if device.get("dev_info", {}).get("device_type") == "LED":
@@ -111,8 +117,11 @@ class EdgecorePlatform(unittest.TestCase):
                 directory = SOURCE / (DEVICE + model + "-r0")
                 data = json.loads((directory / "pddf/pddf-device.json").read_text())
                 health = json.loads((directory / "system_health_monitoring_config.json").read_text())
-                if model == "as7326_56x":
-                    original = json.loads(ORIGINALS[DEVICE + model + "-r0/system_health_monitoring_config.json"])
+                if model in ("as7326_56x", "as7726_32x"):
+                    original = json.loads(ORIGINALS[DEVICE + model + "-r0/system_health_monitoring_config.json"]) if model == "as7326_56x" else {
+                        "services_to_ignore": [], "devices_to_ignore": ["asic"],
+                        "user_defined_checkers": [], "polling_interval": 60,
+                        "led_color": health["led_color"]}
                     self.assertEqual(health["devices_to_ignore"], original["devices_to_ignore"] +
                                      ["PSU1_FAN1.speed", "PSU2_FAN1.speed"])
                     original["led_color"] = health["led_color"]
@@ -131,6 +140,26 @@ class EdgecorePlatform(unittest.TestCase):
                 for device in data.values():
                     if device.get("dev_info", {}).get("device_type") == "LED":
                         self.assertLessEqual({a["attr_name"] for a in device["i2c"]["attr_list"]}, allowed)
+
+    def test_every_reviewed_platform_change_is_backported(self):
+        manifest = json.loads((ROOT / "tests/fixtures/accton-202605-parity.json").read_text())
+        self.assertEqual(manifest["target_commit"], COMMIT)
+        for name, expected in manifest["files"].items():
+            with self.subTest(path=name):
+                self.assertEqual(hashlib.sha256((SOURCE / name).read_bytes()).hexdigest(), expected)
+
+    def test_startup_fan_speeds_match_the_original_branch(self):
+        for path, original in ORIGINALS.items():
+            if "/utils/" not in path or not path.endswith(".py") or "monitor" not in path:
+                continue
+            before = ast.parse(original)
+            after = ast.parse((SOURCE / path).read_text())
+            # Compare the complete startup main, including its initial PWM.
+            def startup(tree):
+                return [ast.dump(node) for node in tree.body
+                        if isinstance(node, ast.FunctionDef) and node.name == "main"]
+            # The monitor function implementation changes, not its startup main.
+            self.assertEqual(startup(before), startup(after), path)
 
     def test_native_as5835_health_is_preserved(self):
         path = platform_directory(MODELS[0]) + "chassis.py"
@@ -418,7 +447,8 @@ def main():
         SOURCE = work / "source"
         SOURCE.mkdir()
         patches = sorted((ROOT / "patches/202605").glob("*.patch"))
-        populate_patch_sources(SOURCE, COMMIT, patches, os.environ.get("EDGECORE_SOURCE_CACHE"))
+        populate_patch_sources(SOURCE, COMMIT, patches, os.environ.get("EDGECORE_SOURCE_CACHE"),
+                               extra_paths=("platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_fan.py",))
         ORIGINALS = {str(path.relative_to(SOURCE)): path.read_text() for path in SOURCE.rglob("*") if path.is_file()}
         for path in ORIGINALS:
             if path.endswith(".bcm"):
@@ -433,11 +463,28 @@ def main():
         subprocess.run(["git", "-C", str(SOURCE), "update-index", "--add", "--cacheinfo",
                         "160000", "a" * 40, "src/sonic-platform-common"], check=True)
         results = apply_branch_patches(SOURCE, work, "202605")
-        assert len(results) == 13 and all(r["status"] == "applied" for r in results)
+        assert len(results) == len(patches) and all(r["status"] == "applied" for r in results)
         assert all(r["status"] == "already-applied" for r in apply_branch_patches(SOURCE, work, "202605"))
         for path in SOURCE.rglob("*.py"):
             compile(path.read_text(), str(path), "exec")
-        result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__]))
+        suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+        # Reuse the reviewed PSU/CPU regressions on the fully patched 202605
+        # files. Stub only the unavailable common base; all platform code is real.
+        helper = types.ModuleType("platform_test_utils")
+        helper.SOURCE, helper.BASE, helper.DEVICE = SOURCE, BASE, DEVICE
+        helper.definitions = definitions
+        thermal_base = types.ModuleType("sonic_platform_base.thermal_base")
+        thermal_base.ThermalBase = object
+        with patch.dict(sys.modules, {"platform_test_utils": helper,
+                                      "sonic_platform_base.thermal_base": thermal_base}):
+            for name in ("test_as7726_cpu_thermal", "test_as5835_cpu_thermal",
+                         "test_psu_health", "test_as5835_psu"):
+                spec = importlib.util.spec_from_file_location(name, ROOT / "tests/accton_regressions" / (name + ".py"))
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[name] = module
+                spec.loader.exec_module(module)
+                suite.addTests(unittest.defaultTestLoader.loadTestsFromModule(module))
+            result = unittest.TextTestRunner(verbosity=2).run(suite)
         if not result.wasSuccessful():
             raise SystemExit(1)
 

@@ -5,9 +5,18 @@ from pathlib import Path
 import urllib.request
 
 
-def populate_patch_sources(source, commit, patches, research_cache=None):
+def populate_patch_sources(source, commit, patches, research_cache=None, extra_paths=()):
     paths = {line.removeprefix("--- a/") for patch in patches
              for line in patch.read_text().splitlines() if line.startswith("--- a/")}
+    # A later patch can modify a file introduced earlier in the series. Such
+    # files have no original at the pinned upstream commit (HTTP 404).
+    added = set()
+    for patch in patches:
+        lines = patch.read_text().splitlines()
+        added.update(right.removeprefix("+++ b/") for left, right in zip(lines, lines[1:])
+                     if left == "--- /dev/null" and right.startswith("+++ b/"))
+    paths -= added
+    paths.update(extra_paths)
 
     def fetch(path):
         destination = source / path

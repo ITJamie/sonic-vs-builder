@@ -141,17 +141,23 @@ For the default `all` selection, a complete release contains:
 
 | Output | Purpose |
 | --- | --- |
-| `docker-sonic-vs.gz` | Docker image archive; load with `docker load -i docker-sonic-vs.gz`. |
-| `sonic-vs.img.gz` | Gzip-compressed QCOW2 disk for QEMU/KVM; decompress with `gzip -dk sonic-vs.img.gz`. |
-| `sonic-broadcom.bin` | Broadcom ONIE installer. |
+| `docker-sonic-vs-<image-version>.gz` | Docker image archive; load with `docker load -i <downloaded-file>`. |
+| `sonic-vs-<image-version>.img.gz` | Gzip-compressed QCOW2 disk for QEMU/KVM; decompress with `gzip -dk <downloaded-file>`. |
+| `sonic-broadcom-<image-version>.bin` | Broadcom ONIE installer. |
 | `vs-metadata.json`, `kvm-metadata.json`, `broadcom-metadata.json` | Upstream commit, platform, output SHA-256 and size; VS metadata also records each selected registry's image reference and digest. |
 | `vs-SHA256SUMS`, `kvm-SHA256SUMS`, `broadcom-SHA256SUMS` | Checksums of the complete downloadable files. |
 | `vs-README.txt`, `kvm-README.txt`, `broadcom-README.txt` | Download, reassembly, verification and usage instructions. |
 
+Image filenames include the same version shown by the installed image, for example
+`sonic-broadcom-202605-itjamie.20261118-15-ztp.bin`. Upstream build targets keep
+their original names. Older outputs without image-version metadata retain their
+original filenames during publication recovery. Metadata records the release
+filename and uploaded assets; checksums and usage instructions use those names.
+
 GitHub requires each release asset to be under 2 GiB. Larger files are uploaded as ordered 1 GiB parts named `*.part0001`, `*.part0002`, etc. Download all parts, reassemble, then check the checksum:
 
 ```sh
-cat sonic-broadcom.bin.part* > sonic-broadcom.bin
+cat sonic-broadcom-202605-itjamie.20261118-15-ztp.bin.part* > sonic-broadcom-202605-itjamie.20261118-15-ztp.bin
 sha256sum -c broadcom-SHA256SUMS
 ```
 

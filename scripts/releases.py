@@ -200,15 +200,26 @@ def reserve_build(repository, entry, target, run_id, attempt, started_at, enable
     raise ValueError("Could not reserve a unique date-based release tag")
 
 
+def image_filename(platform, version=None):
+    filename = TARGETS[platform]
+    if not version:
+        return filename
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", version):
+        raise ValueError("Invalid image version for release filename")
+    suffix = "".join(Path(filename).suffixes)
+    return f"{filename[:-len(suffix)]}-{version}{suffix}"
+
+
 def stage(work, repository, tag, target):
     work = owned_work(work)
     metadata_path = work / "metadata.json"
     metadata = json.loads((metadata_path if metadata_path.exists() else work / "validated.json").read_text())
     platform = metadata["platform"]
-    filename = TARGETS[platform]
-    source = work / "source" / "target" / filename
+    source_name = TARGETS[platform]
+    filename = image_filename(platform, metadata.get("image_version"))
+    source = work / "source" / "target" / source_name
     if not source.exists():
-        source = work / "retained-output" / filename
+        source = work / "retained-output" / source_name
     # Recheck the checksum before uploading an already validated build.
     if metadata["sha256"] != checksum(source):
         raise ValueError("Output changed after validation")
@@ -219,7 +230,12 @@ def stage(work, repository, tag, target):
     with tempfile.TemporaryDirectory(prefix="release-assets-", dir=work) as directory:
         staging = Path(directory)
         if source.stat().st_size < ASSET_LIMIT:
-            upload(repository, release_id, source)
+            # A same-filesystem hard link avoids copying a multi-GB installer.
+            path = source
+            if filename != source_name:
+                path = staging / filename
+                os.link(source, path)
+            upload(repository, release_id, path)
             assets.append(filename)
             instructions = f"Download {filename}.\n"
         else:
@@ -249,10 +265,11 @@ def stage(work, repository, tag, target):
             instructions += f"docker load -i {filename}\n"
         elif platform == "kvm":
             instructions += (f"gzip -dk {filename}\n"
-                             "The decompressed sonic-vs.img is a QCOW2 disk for QEMU/KVM.\n"
+                             f"The decompressed {filename.removesuffix('.gz')} is a QCOW2 disk for QEMU/KVM.\n"
                              "Import it into your VM/lab system; configure resources and NICs for your topology.\n")
         else:
-            instructions += "Use the verified sonic-broadcom.bin with ONIE on a supported switch.\n"
+            instructions += f"Use the verified {filename} with ONIE on a supported switch.\n"
+        metadata["release_filename"] = filename
         metadata["release_assets"] = assets
         files = {f"{platform}-SHA256SUMS": f"{metadata['sha256']}  {filename}\n",
                  f"{platform}-README.txt": instructions,
@@ -286,7 +303,9 @@ def finish(repository, tag, images):
         for required in (f"{platform}-metadata.json", f"{platform}-SHA256SUMS", f"{platform}-README.txt"):
             if required not in names:
                 raise ValueError(f"Release is incomplete: missing {required}")
-        if filename not in names and f"{filename}.part0001" not in names:
+        version = re.search(r"^Image version: `([^`]+)`$", existing.get("body") or "", re.MULTILINE)
+        candidates = {filename, image_filename(platform, version[1] if version else None)}
+        if not any(name in names or f"{name}.part0001" in names for name in candidates):
             raise ValueError(f"Release is incomplete: missing {filename}")
     published = api(repository, f"/releases/{existing['id']}", "PATCH", {"tag_name": tag, "draft": False, "make_latest": "false"})
     print(published["html_url"])

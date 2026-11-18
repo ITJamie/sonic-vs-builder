@@ -157,6 +157,61 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(json.loads(uploaded["broadcom-metadata.json"])["release_assets"], ["sonic-broadcom.bin"])
         self.assertEqual(json.loads((self.work / "release.json").read_text())["tag"], DRAFT["tag_name"])
 
+    def test_versioned_images_checksums_and_instructions_round_trip(self):
+        version = "202605-itjamie.20261118-15-ztp"
+        for platform, target in releases.TARGETS.items():
+            for split in (False, True):
+                with self.subTest(platform=platform, split=split):
+                    source = self.source.parent / target
+                    source.write_bytes(b"validated image payload for splitting")
+                    metadata = json.loads((self.work / "validated.json").read_text())
+                    metadata.update(platform=platform, image_version=version, sha256=checksum(source))
+                    write_json(self.work / "validated.json", metadata)
+                    filename = releases.image_filename(platform, version)
+                    draft = {**DRAFT, "body": f"Image version: `{version}`\n"}
+                    uploaded = {}
+                    with patch.object(releases, "release", return_value=draft), \
+                            patch.object(releases, "upload", side_effect=lambda repo, rid, path:
+                                         uploaded.update({path.name: path.read_bytes()})), \
+                            patch.object(releases, "ASSET_LIMIT", 20 if split else 100), \
+                            patch.object(releases, "PART_SIZE", 8):
+                        releases.stage(self.work, REPO, DRAFT["tag_name"], "b" * 40)
+                    images = sorted(name for name in uploaded if name.startswith(filename))
+                    self.assertEqual(b"".join(uploaded[name] for name in images), source.read_bytes())
+                    self.assertEqual(uploaded[f"{platform}-SHA256SUMS"].decode(),
+                                     f"{checksum(source)}  {filename}\n")
+                    self.assertIn(filename, uploaded[f"{platform}-README.txt"].decode())
+                    published = json.loads(uploaded[f"{platform}-metadata.json"])
+                    self.assertEqual(published["release_filename"], filename)
+                    self.assertEqual(published["release_assets"], images)
+                    self.assertTrue(source.exists())
+                    self.assertEqual(list(self.work.glob("release-assets-*")), [])
+                    with patch.object(releases, "release", return_value=draft), \
+                            patch.object(releases, "api", side_effect=[
+                                [{"name": name} for name in uploaded],
+                                {**draft, "draft": False}]) as api:
+                        releases.finish(REPO, DRAFT["tag_name"], platform)
+                    self.assertEqual(api.call_args.args[2], "PATCH")
+
+    def test_release_filename_preserves_extensions_and_rejects_paths(self):
+        self.assertEqual(releases.image_filename("broadcom", "202605-itjamie.20261118-15-ztp"),
+                         "sonic-broadcom-202605-itjamie.20261118-15-ztp.bin")
+        self.assertEqual(releases.image_filename("kvm", "test"), "sonic-vs-test.img.gz")
+        self.assertEqual(releases.image_filename("vs", "test"), "docker-sonic-vs-test.gz")
+        for invalid in ("../escape", "a/b", "two words", "$(cmd)"):
+            with self.assertRaises(ValueError):
+                releases.image_filename("broadcom", invalid)
+
+    def test_finish_rejects_image_from_another_version(self):
+        draft = {**DRAFT, "body": "Image version: `expected-version`\n"}
+        names = ["sonic-broadcom-other-version.bin", "broadcom-metadata.json",
+                 "broadcom-SHA256SUMS", "broadcom-README.txt"]
+        with patch.object(releases, "release", return_value=draft), \
+                patch.object(releases, "api", return_value=[{"name": name} for name in names]) as api:
+            with self.assertRaisesRegex(ValueError, "Release is incomplete"):
+                releases.finish(REPO, DRAFT["tag_name"], "broadcom")
+            self.assertEqual(api.call_count, 1)
+
     @patch.object(releases, "release", return_value=None)
     @patch.object(releases, "api", return_value=DRAFT)
     @patch.object(releases, "upload")

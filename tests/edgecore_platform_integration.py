@@ -78,22 +78,26 @@ class EdgecorePlatform(unittest.TestCase):
         for model in MODELS[1:]:
             path = DEVICE + model + "-r0/pddf/pddf-device.json"
             before, after = json.loads(ORIGINALS[path]), json.loads((SOURCE / path).read_text())
-            if model in ("as7326_56x", "as7726_32x"):
+            if model in MODELS[1:]:
                 devices = (("PSU1-PMBUS", "0x59"), ("PSU2-PMBUS", "0x5b")) if model == "as7326_56x" else (
                     ("PSU1-PMBUS", "0x5b"), ("PSU2-PMBUS", "0x58"))
                 for key, address in devices:
                     attrs = after[key]["i2c"]["attr_list"]
                     definitions = [("psu_v_out_min", "0xa4"), ("psu_v_out_max", "0xa5")]
                     definitions.append(("psu_temp1_high_threshold", "0x51"))
-                    definitions = [("psu_v_in", "0x88"), ("psu_i_in", "0x89"),
-                                   ("psu_p_in", "0x97")] + definitions
+                    if model == "as7816_64x":
+                        definitions.append(("psu_p_out_max", "0xa7"))
+                    else:
+                        definitions = [("psu_v_in", "0x88"), ("psu_i_in", "0x89"),
+                                       ("psu_p_in", "0x97")] + definitions
+                        definitions.append(("psu_p_out_max", "0xa7"))
                     limits = [a for a in attrs if a["attr_name"] in dict(definitions)]
-                    self.assertEqual(limits, [
+                    self.assertCountEqual(limits, [
                         {"attr_name": name, "attr_devaddr": address, "attr_devtype": "pmbus",
                          "attr_offset": offset, "attr_mask": "0x0", "attr_cmpval": "0xff", "attr_len": "2"}
                         for name, offset in definitions])
                     after[key]["i2c"]["attr_list"] = [a for a in attrs if a not in limits]
-            if model in ("as7326_56x", "as7726_32x"):
+            if model in MODELS[1:]:
                 self.assertEqual(after["PLATFORM"]["num_components"], 1)
                 self.assertEqual(after.pop("COMPONENT1")["comp_attr"]["name"], "BIOS")
                 if "num_components" in before["PLATFORM"]:
@@ -125,8 +129,8 @@ class EdgecorePlatform(unittest.TestCase):
                 directory = SOURCE / (DEVICE + model + "-r0")
                 data = json.loads((directory / "pddf/pddf-device.json").read_text())
                 health = json.loads((directory / "system_health_monitoring_config.json").read_text())
-                if model in ("as7326_56x", "as7726_32x"):
-                    original = json.loads(ORIGINALS[DEVICE + model + "-r0/system_health_monitoring_config.json"]) if model == "as7326_56x" else {
+                if model in MODELS[1:]:
+                    original = json.loads(ORIGINALS[DEVICE + model + "-r0/system_health_monitoring_config.json"]) if model != "as7726_32x" else {
                         "services_to_ignore": [], "devices_to_ignore": ["asic"],
                         "user_defined_checkers": [], "polling_interval": 60,
                         "led_color": health["led_color"]}
@@ -140,7 +144,8 @@ class EdgecorePlatform(unittest.TestCase):
                     plugin_path = DEVICE + model + "-r0/pddf/pd-plugin.json"
                     plugin = json.loads((SOURCE / plugin_path).read_text())
                     mapping = plugin["PSU"]["psu_fan_dir"]["i2c"]["valmap"]
-                    self.assertEqual(mapping.pop("F2B*"), mapping["F2B"])
+                    if model != "as7816_64x":
+                        self.assertEqual(mapping.pop("F2B*"), mapping["F2B"])
                     self.assertEqual(mapping["F2B"], "EXHAUST")
                     self.assertEqual(plugin, json.loads(ORIGINALS[plugin_path]))
                 colors = {a["attr_name"] for a in data["DIAG_LED"]["i2c"]["attr_list"]}
@@ -475,7 +480,8 @@ def main():
                                    "src/sonic-platform-common/sonic_platform_base/component_base.py",
                                    "device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/psu.py",
                                    "platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_psu.py",
-                                   "platform/pddf/i2c/utils/pddfparse.py"))
+                                   "platform/pddf/i2c/utils/pddfparse.py",
+                                   "device/accton/x86_64-accton_as7816_64x-r0/pddf/pd-plugin.json"))
         ORIGINALS = {str(path.relative_to(SOURCE)): path.read_text() for path in SOURCE.rglob("*") if path.is_file()}
         for path in ORIGINALS:
             if path.endswith(".bcm"):
@@ -518,7 +524,9 @@ def main():
                          "test_as7326_cpu_thermal", "test_as7326_fan_conversion",
                          "test_pddf_path_recovery", "test_as7326_psu_temperature",
                          "test_bios_inventory", "test_as5835_psu_sensors",
-                         "test_psu_sensors", "test_psu_input"):
+                         "test_psu_sensors", "test_psu_input",
+                         "test_as7816_cpu_thermal", "test_as7816_environment",
+                         "test_psu_capacity"):
                 spec = importlib.util.spec_from_file_location(name, ROOT / "tests/accton_regressions" / (name + ".py"))
                 module = importlib.util.module_from_spec(spec)
                 sys.modules[name] = module

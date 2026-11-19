@@ -124,7 +124,7 @@ are recorded under `compatibility_fixes`.
   [PR #30498](https://github.com/sonic-net/sonic-buildimage/pull/30498).
 
 The former `0011` voltage definitions and `0012` narrow PSU fan exclusions are
-folded into the final file patches `0023` and `0020`. Their behavior is retained;
+folded into the final file patches `0025` and `0020`. Their behavior is retained;
 PSU fan status, direction, measured speed and power-good checks remain enabled.
 
 - `202605/0013-decode-as7326-fsf019-airflow-label.patch`: map the observed
@@ -155,23 +155,29 @@ The follow-ups ported from the current `accton-fixes` branch are:
 | `0021` | Read-only BIOS components on AS7326/AS7726. |
 | `0022` | AS5835 native PSU output voltage/current sensors and sensormond. |
 | `0023` | AS7326/AS7726 input voltage/current/power API and input voltage/current sensors. |
+| `0024` | AS7816 hardware PSU voltage/temperature limits and capacity, airflow labels, CPU/BIOS/output sensor inventory and unsupported inputs. |
+| `0025` | AS7326/AS7726 manufacturer output capacity through both capacity APIs; replace fixed 1200 W ratings. |
 
 Files modified by several fixes are consolidated into their final patch so
 apply/reapply recognition works on completed source trees. Earlier watchdog,
 health/LED, voltage-limit and CPU changes to those files are included there.
-In particular, `0023` contains the complete PDDF JSON, chassis and PSU sensor
-integration; `0022` contains the complete native AS5835 chassis changes.
-AS5835 input telemetry remains unsupported; manufacturer ratings are not alarms.
+In particular, `0023` contains the PDDF chassis and shared PSU sensor integration;
+`0025` owns the complete AS7326/AS7726 PDDF JSON and PSU API files, including
+the earlier input telemetry, voltage/temperature limits, BIOS and LED definitions.
+`0022` contains the complete native AS5835 chassis changes.
+`0024` includes the earlier AS7816 LED/health/chassis changes, relocated from
+`0006`, so each final file still belongs to a single patch.
+AS5835 and AS7816 input telemetry remain unsupported; manufacturer ratings are not alarms.
 Input power is exposed through the existing PSU API, without daemon changes.
 
 The series is reconciled with `accton-fixes` at
-`5b9c212e474020111a9827a77c10665e0a16f782` and watchdog helper
+`25e1c0590f93cd6a7e44c134d0c5e77e65e2e9b3` and watchdog helper
 `1c8e439f9f14ef04dd05fa62d79e635c215d24d6`. It preserves 202605 dependency pins
 and fan conversion syntax. The experimental master sairedis rollback is excluded.
-The parity fixture records 50 resulting implementation files, checks coverage of
+The parity fixture records 55 resulting implementation files, checks coverage of
 all reviewed platform changes, and documents the branch adaptations. Integration
-applies/reapplies all 21 patches, checks original fan startup code, and runs
-85 hardware-free regressions against the actual patched source.
+applies/reapplies all 23 patches, checks original fan startup code, and runs
+105 hardware-free regressions against the actual patched source.
 
 The four-family support matrix, exact scope, source pins and required hardware
 checks are in [Edgecore platform support](../docs/edgecore-platform-support.md).

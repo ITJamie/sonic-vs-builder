@@ -1,0 +1,494 @@
+Subject: [202605] [accton] Expose AS7326 and AS7726 PSU input telemetry
+
+Backported from ITJamie/sonic-buildimage accton-fixes commit 5b9c212e474020111a9827a77c10665e0a16f782.
+Verified target source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Includes prerequisite changes to these files from earlier platform patches.
+Keep each final file in one patch so apply/reapply checks remain reliable.
+Preserve 202605 conversion syntax, dependency pins and original fan policy.
+Upstream PR: https://github.com/sonic-net/sonic-buildimage/pull/30780
+Remove when the target branch supplies equivalent fixes.
+
+diff --git a/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json b/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json
+index 857b4e1..0584030 100644
+--- a/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json
++++ b/device/accton/x86_64-accton_as7326_56x-r0/pddf/pddf-device.json
+@@ -6,6 +6,7 @@
+         "num_fans_pertray":2,
+         "num_ports":58,
+         "num_temps": 4,
++        "num_components": 1,
+         "pddf_dev_types":
+         {
+             "description":"AS7326-56X - Below is the list of supported PDDF device types (chip names) for various components. If any component uses some other driver, we will create the client using 'echo <dev-address> <dev-type> > <path>/new_device' method",
+@@ -203,11 +204,17 @@
+                 { "attr_name":"psu_power_good", "attr_devaddr":"0x60", "attr_devtype":"cpld", "attr_offset":"0x2", "attr_mask":"0x4", "attr_cmpval":"0x4", "attr_len":"1"},
+                 { "attr_name":"psu_mfr_id", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0X99", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"10" },
+                 { "attr_name":"psu_fan_dir", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0xc3", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"5"},
++                { "attr_name":"psu_v_in", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x88", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_i_in", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x89", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_p_in", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x97", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_v_out", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x8b", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_v_out_min", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0xa4", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_v_out_max", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0xa5", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_i_out", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x8c", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_p_out", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x96", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_fan1_speed_rpm", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x90", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+-                { "attr_name":"psu_temp1_input", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x8d", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"}
++                { "attr_name":"psu_temp1_input", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x8d", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_temp1_high_threshold", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x51", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"}
+             ]
+         }
+     },
+@@ -252,11 +259,17 @@
+                 { "attr_name":"psu_power_good", "attr_devaddr":"0x60", "attr_devtype":"cpld", "attr_offset":"0x2", "attr_mask":"0x8", "attr_cmpval":"0x8", "attr_len":"1"},
+                 { "attr_name":"psu_mfr_id", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0X99", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"10" },
+                 { "attr_name":"psu_fan_dir", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0xc3", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"5"},
++                { "attr_name":"psu_v_in", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x88", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_i_in", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x89", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_p_in", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x97", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_v_out", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x8b", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_v_out_min", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0xa4", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_v_out_max", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0xa5", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_i_out", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x8c", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_p_out", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x96", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+                 { "attr_name":"psu_fan1_speed_rpm", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x90", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+-                { "attr_name":"psu_temp1_input", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x8d", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"}
++                { "attr_name":"psu_temp1_input", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x8d", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++                { "attr_name":"psu_temp1_high_threshold", "attr_devaddr":"0x59", "attr_devtype":"pmbus", "attr_offset":"0x51", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"}
+             ]
+         }
+     },
+@@ -2916,13 +2929,13 @@
+         {
+             "attr_list":
+             [
+-                {"attr_name":"STATUS_LED_COLOR_BLUE_BLINK", "descr": "" , "bits" : "5:0",  "value" : "0x27", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
+-                {"attr_name":"STATUS_LED_COLOR_GREEN_BLINK", "descr": "" , "bits" : "5:0",  "value" : "0x17", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
+-                {"attr_name":"STATUS_LED_COLOR_AMBER_BLINK", "descr": "" , "bits" : "5:0",  "value" : "0xf", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
+-                {"attr_name":"STATUS_LED_COLOR_BLUE", "descr": "" , "bits" : "5:0",  "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
+-                {"attr_name":"STATUS_LED_COLOR_GREEN", "descr": "" , "bits" : "5:0",  "value" : "0x5", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
+-                {"attr_name":"STATUS_LED_COLOR_AMBER", "descr": "" , "bits" : "5:0",  "value" : "0x6", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
+-                {"attr_name":"STATUS_LED_COLOR_OFF", "descr": "" , "bits" : "5:0",  "value" : "0xf", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"}
++                {"attr_name":"blue_blink", "descr": "" , "bits" : "5:0",  "value" : "0x27", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
++                {"attr_name":"green_blink", "descr": "" , "bits" : "5:0",  "value" : "0x17", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
++                {"attr_name":"amber_blink", "descr": "" , "bits" : "5:0",  "value" : "0xf", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
++                {"attr_name":"blue", "descr": "" , "bits" : "5:0",  "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
++                {"attr_name":"green", "descr": "" , "bits" : "5:0",  "value" : "0x5", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
++                {"attr_name":"amber", "descr": "" , "bits" : "5:0",  "value" : "0x6", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"},
++                {"attr_name":"off", "descr": "" , "bits" : "5:0",  "value" : "0xf", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x25"}
+             ]
+         }
+     },
+@@ -2934,15 +2947,28 @@
+          {
+              "attr_list":
+              [
+-                {"attr_name":"STATUS_LED_COLOR_BLUE_BLINK", "descr": "" , "bits" : "5:0",  "value" : "0x27", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
+-                {"attr_name":"STATUS_LED_COLOR_GREEN_BLINK", "descr": "" , "bits" : "5:0",  "value" : "0x17", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
+-                {"attr_name":"STATUS_LED_COLOR_AMBER_BLINK", "descr": "" , "bits" : "5:0",  "value" : "0xf", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
+-                {"attr_name":"STATUS_LED_COLOR_BLUE", "descr": "" , "bits" : "5:0",  "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
+-                {"attr_name":"STATUS_LED_COLOR_GREEN", "descr": "" , "bits" : "5:0",  "value" : "0x5", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
+-                {"attr_name":"STATUS_LED_COLOR_AMBER", "descr": "" , "bits" : "5:0",  "value" : "0x6", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
+-                {"attr_name":"STATUS_LED_COLOR_OFF", "descr": "" , "bits" : "5:0",  "value" : "0x7", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"}
++                {"attr_name":"blue_blink", "descr": "" , "bits" : "5:0",  "value" : "0x27", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
++                {"attr_name":"green_blink", "descr": "" , "bits" : "5:0",  "value" : "0x17", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
++                {"attr_name":"red_blink", "descr": "" , "bits" : "5:0",  "value" : "0xf", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
++                {"attr_name":"blue", "descr": "" , "bits" : "5:0",  "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
++                {"attr_name":"green", "descr": "" , "bits" : "5:0",  "value" : "0x5", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
++                {"attr_name":"red", "descr": "" , "bits" : "5:0",  "value" : "0x6", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"},
++                {"attr_name":"off", "descr": "" , "bits" : "5:0",  "value" : "0x7", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x24"}
+                 
+              ]
+         }
++    },
++    "COMPONENT1": {
++        "comp_attr": {
++            "name": "BIOS",
++            "description": "Basic Input/Output System",
++            "type": "bios"
++        },
++        "attr_list": [
++            {
++                "attr_name": "version",
++                "cmd": "cat /sys/class/dmi/id/bios_version"
++            }
++        ]
+     }
+ }
+diff --git a/device/accton/x86_64-accton_as7726_32x-r0/pddf/pddf-device.json b/device/accton/x86_64-accton_as7726_32x-r0/pddf/pddf-device.json
+index b73f22b..9402e97 100644
+--- a/device/accton/x86_64-accton_as7726_32x-r0/pddf/pddf-device.json
++++ b/device/accton/x86_64-accton_as7726_32x-r0/pddf/pddf-device.json
+@@ -6,6 +6,7 @@
+ 		"num_fans_pertray":2,
+ 		"num_ports":34,
+ 		"num_temps":5,
++		"num_components":1,
+ 		"pddf_dev_types":
+ 		{
+ 			"description":"AS7726 - Below is the list of supported PDDF device types (chip names) for various components. If any component uses some other driver, we will create the client using 'echo <dev-address> <dev-type> > <path>/new_device' method",
+@@ -1653,11 +1654,17 @@
+ 				{ "attr_name":"psu_power_good", "attr_devaddr":"0x60", "attr_devtype":"cpld", "attr_offset":"0x2", "attr_mask":"0x14", "attr_cmpval":"0x14", "attr_len":"1"},
+ 				{ "attr_name":"psu_mfr_id", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0X99", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"10" },			
+ 				{ "attr_name":"psu_fan_dir", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0xc3", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"5"},
++				{ "attr_name":"psu_v_in", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0x88", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++				{ "attr_name":"psu_i_in", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0x89", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++				{ "attr_name":"psu_p_in", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0x97", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+ 				{ "attr_name":"psu_v_out", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0x8b", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++				{ "attr_name":"psu_v_out_min", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0xa4", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++				{ "attr_name":"psu_v_out_max", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0xa5", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+ 				{ "attr_name":"psu_i_out", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0x8c", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+ 				{ "attr_name":"psu_p_out", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0x96", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+ 				{ "attr_name":"psu_fan1_speed_rpm", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0x90", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+-				{ "attr_name":"psu_temp1_input", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0x8d", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"}
++				{ "attr_name":"psu_temp1_input", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0x8d", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++				{ "attr_name":"psu_temp1_high_threshold", "attr_devaddr":"0x58", "attr_devtype":"pmbus", "attr_offset":"0x51", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"}
+ 			]
+ 		}
+ 	},
+@@ -1701,11 +1708,17 @@
+ 				{ "attr_name":"psu_power_good", "attr_devaddr":"0x60", "attr_devtype":"cpld", "attr_offset":"0x2", "attr_mask":"0x28", "attr_cmpval":"0x28", "attr_len":"1"},
+ 				{ "attr_name":"psu_mfr_id", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0X99", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"10" },			
+ 				{ "attr_name":"psu_fan_dir", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0xc3", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"5"},
++				{ "attr_name":"psu_v_in", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x88", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++				{ "attr_name":"psu_i_in", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x89", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++				{ "attr_name":"psu_p_in", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x97", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+ 				{ "attr_name":"psu_v_out", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x8b", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++				{ "attr_name":"psu_v_out_min", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0xa4", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++				{ "attr_name":"psu_v_out_max", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0xa5", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+ 				{ "attr_name":"psu_i_out", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x8c", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+ 				{ "attr_name":"psu_p_out", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x96", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+ 				{ "attr_name":"psu_fan1_speed_rpm", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x90", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
+-				{ "attr_name":"psu_temp1_input", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x8d", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"}
++				{ "attr_name":"psu_temp1_input", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x8d", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"},
++				{ "attr_name":"psu_temp1_high_threshold", "attr_devaddr":"0x5b", "attr_devtype":"pmbus", "attr_offset":"0x51", "attr_mask":"0x0", "attr_cmpval":"0xff", "attr_len":"2"}
+ 			]
+ 		}
+ 	},
+@@ -1894,8 +1907,8 @@
+ 			"i2c" : {
+ 				"attr_list":
+ 				[
+-					{"attr_name":"STATUS_LED_COLOR_BLUE", "descr" : "", "bits" : "7",  "value" : "0x0", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"},
+-					{"attr_name":"STATUS_LED_COLOR_OFF",  "descr" : "", "bits" : "7",  "value" : "0x1", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"}
++					{"attr_name":"blue", "descr" : "", "bits" : "7",  "value" : "0x0", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"},
++					{"attr_name":"off",  "descr" : "", "bits" : "7",  "value" : "0x1", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"}
+ 				]
+ 			}
+ 	},
+@@ -1907,12 +1920,24 @@
+ 			"i2c" : {
+ 				"attr_list":
+ 				[
+-					{"attr_name":"STATUS_LED_COLOR_GREEN", "descr" : "", "bits" : "1:0", "value" : "0x2", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"},
+-					{"attr_name":"STATUS_LED_COLOR_RED",   "descr" : "" ,"bits" : "1:0", "value" : "0x1", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"},
+-					{"attr_name":"STATUS_LED_COLOR_OFF",   "descr" : "" ,"bits" : "1:0", "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"}
++					{"attr_name":"green", "descr" : "", "bits" : "1:0", "value" : "0x2", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"},
++					{"attr_name":"red",   "descr" : "" ,"bits" : "1:0", "value" : "0x1", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"},
++					{"attr_name":"off",   "descr" : "" ,"bits" : "1:0", "value" : "0x3", "swpld_addr" : "0x60", "swpld_addr_offset" : "0x41"}
+ 				]
+ 			}
+ 
+-	}
+-	
++	},
++    "COMPONENT1": {
++        "comp_attr": {
++            "name": "BIOS",
++            "description": "Basic Input/Output System",
++            "type": "bios"
++        },
++        "attr_list": [
++            {
++                "attr_name": "version",
++                "cmd": "cat /sys/class/dmi/id/bios_version"
++            }
++        ]
++    }
+ }
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/chassis.py b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/chassis.py
+index feb1fbd..534163d 100644
+--- a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/chassis.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/chassis.py
+@@ -10,6 +10,10 @@ try:
+     import sys
+     import time
+     from sonic_platform_pddf_base.pddf_chassis import PddfChassis
++    from sonic_platform.thermal import CpuThermal
++    from sonic_platform_pddf_base.pddf_psu_sensor import (
++        PsuVoltageSensor, PsuCurrentSensor,
++        PsuInputVoltageSensor, PsuInputCurrentSensor)
+ except ImportError as e:
+     raise ImportError(str(e) + "- required module not found")
+ 
+@@ -21,6 +25,14 @@ class Chassis(PddfChassis):
+ 
+     def __init__(self, pddf_data=None, pddf_plugin_data=None):
+         PddfChassis.__init__(self, pddf_data, pddf_plugin_data)
++        self._thermal_list.extend(CpuThermal.discover(len(self._thermal_list)))
++        for position, psu in enumerate(self._psu_list, 1):
++            self._voltage_sensor_list.append(PsuVoltageSensor(psu, position))
++            self._current_sensor_list.append(PsuCurrentSensor(psu, position))
++        # Append inputs after existing outputs to preserve output sensor indices.
++        for position, psu in enumerate(self._psu_list, 1):
++            self._voltage_sensor_list.append(PsuInputVoltageSensor(psu, position))
++            self._current_sensor_list.append(PsuInputCurrentSensor(psu, position))
+ 
+     # Provide the functions/variables below for which implementation is to be overwritten
+     sfp_change_event_data = {'valid': 0, 'last': 0, 'present': 0}
+@@ -83,3 +95,13 @@ class Chassis(PddfChassis):
+             sys.stderr.write("SFP index {} out of range (1-{})\n".format(
+                              index, len(self._sfp_list)))
+         return sfp
++
++    # Keep the legacy spelling used by show/system_health.py.
++    def initizalize_system_led(self):
++        return True
++
++    def get_status_led(self):
++        return self.get_system_led("DIAG_LED")
++
++    def set_status_led(self, color):
++        return self.set_system_led("DIAG_LED", color)
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/psu.py b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/psu.py
+index 1b260fc..24b87d4 100644
+--- a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/psu.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/psu.py
+@@ -4,11 +4,12 @@
+ 
+ try:
+     from sonic_platform_pddf_base.pddf_psu import PddfPsu
++    from sonic_platform_pddf_base.pddf_psu_sensor import PsuInputTelemetry
+ except ImportError as e:
+     raise ImportError (str(e) + "- required module not found")
+ 
+ 
+-class Psu(PddfPsu):
++class Psu(PsuInputTelemetry, PddfPsu):
+     """PDDF Platform-Specific PSU class"""
+     
+     PLATFORM_PSU_CAPACITY = 1200
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/chassis.py b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/chassis.py
+index 8ff20a7..9899b4b 100644
+--- a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/chassis.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/chassis.py
+@@ -10,6 +10,10 @@ try:
+     import sys
+     import time
+     from sonic_platform_pddf_base.pddf_chassis import PddfChassis
++    from sonic_platform_pddf_base.pddf_psu_sensor import (
++        PsuVoltageSensor, PsuCurrentSensor,
++        PsuInputVoltageSensor, PsuInputCurrentSensor)
++    from sonic_platform.thermal import CpuThermal
+ except ImportError as e:
+     raise ImportError(str(e) + "- required module not found")
+ 
+@@ -21,6 +25,14 @@ class Chassis(PddfChassis):
+ 
+     def __init__(self, pddf_data=None, pddf_plugin_data=None):
+         PddfChassis.__init__(self, pddf_data, pddf_plugin_data)
++        self._thermal_list.extend(CpuThermal.discover(len(self._thermal_list)))
++        for position, psu in enumerate(self._psu_list, 1):
++            self._voltage_sensor_list.append(PsuVoltageSensor(psu, position))
++            self._current_sensor_list.append(PsuCurrentSensor(psu, position))
++        # Append inputs after existing outputs to preserve output sensor indices.
++        for position, psu in enumerate(self._psu_list, 1):
++            self._voltage_sensor_list.append(PsuInputVoltageSensor(psu, position))
++            self._current_sensor_list.append(PsuInputCurrentSensor(psu, position))
+ 
+     # Provide the functions/variables below for which implementation is to be overwritten
+     sfp_change_event_data = {'valid': 0, 'last': 0, 'present': 0}
+@@ -84,3 +96,13 @@ class Chassis(PddfChassis):
+             sys.stderr.write("SFP index {} out of range (1-{})\n".format(
+                              index, len(self._sfp_list)))
+         return sfp
++
++    # Keep the legacy spelling used by show/system_health.py.
++    def initizalize_system_led(self):
++        return True
++
++    def get_status_led(self):
++        return self.get_system_led("DIAG_LED")
++
++    def set_status_led(self, color):
++        return self.set_system_led("DIAG_LED", color)
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/psu.py b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/psu.py
+index a2a3302..940cd5d 100644
+--- a/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/psu.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as7726-32x/sonic_platform/psu.py
+@@ -4,11 +4,12 @@
+ 
+ try:
+     from sonic_platform_pddf_base.pddf_psu import PddfPsu
++    from sonic_platform_pddf_base.pddf_psu_sensor import PsuInputTelemetry
+ except ImportError as e:
+     raise ImportError (str(e) + "- required module not found")
+ 
+ 
+-class Psu(PddfPsu):
++class Psu(PsuInputTelemetry, PddfPsu):
+     """PDDF Platform-Specific PSU class"""
+     
+     PLATFORM_PSU_CAPACITY = 1200
+diff --git a/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_psu_sensor.py b/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_psu_sensor.py
+new file mode 100644
+index 0000000..a40042c
+--- /dev/null
++++ b/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_psu_sensor.py
+@@ -0,0 +1,156 @@
++"""Expose PSU electrical measurements through the chassis sensor API.
++
++Opt-in adapters reuse the existing PSU API; psud remains responsible for PSU
++health. SensorBase uses mV/mA, whereas the PSU API returns V/A.
++"""
++
++import math
++
++from sonic_platform_base.sensor_base import CurrentSensorBase, VoltageSensorBase
++
++
++class _PsuSensor:
++    _direction = "Output"
++
++    def __init__(self, psu, position):
++        self._psu = psu
++        self._position = position
++        self._minimum = None
++        self._maximum = None
++
++    def get_name(self):
++        return "{}_{}_{}".format(self._psu.get_name(), self._direction, self._quantity)
++
++    def get_position_in_parent(self):
++        return self._position
++
++    def is_replaceable(self):
++        return True
++
++    def get_presence(self):
++        return self._psu.get_presence()
++
++    def get_status(self):
++        return self._psu.get_status()
++
++    def _read(self, method):
++        try:
++            if not self.get_presence() or not self.get_status():
++                return None
++            if method is None:
++                return None
++            value = getattr(self._psu, method)()
++            if value is None or isinstance(value, bool):
++                return None
++            value = float(value)
++            if not math.isfinite(value) or value < 0:
++                return None
++            return value * 1000
++        except (AttributeError, NotImplementedError, OSError, ValueError, TypeError):
++            return None
++
++    def get_value(self):
++        value = self._read(self._value_method)
++        if value is None:
++            # Do not retain extrema across PSU absence or unreadable samples.
++            self._minimum = self._maximum = None
++        else:
++            self._minimum = value if self._minimum is None else min(value, self._minimum)
++            self._maximum = value if self._maximum is None else max(value, self._maximum)
++        return value
++
++    def get_minimum_recorded(self):
++        self.get_value()
++        return self._minimum
++
++    def get_maximum_recorded(self):
++        self.get_value()
++        return self._maximum
++
++    def get_low_threshold(self):
++        value = self._read(self._low_method)
++        return value if value is not None and value > 0 else None
++
++    def get_high_threshold(self):
++        value = self._read(self._high_method)
++        return value if value is not None and value > 0 else None
++
++    def get_low_critical_threshold(self):
++        return None
++
++    def get_high_critical_threshold(self):
++        return None
++
++
++class PsuVoltageSensor(_PsuSensor, VoltageSensorBase):
++    """PSU output voltage and manufacturer voltage limits, in millivolts."""
++
++    _quantity = "Voltage"
++    _value_method = "get_voltage"
++    _low_method = "get_voltage_low_threshold"
++    _high_method = "get_voltage_high_threshold"
++
++
++class PsuCurrentSensor(_PsuSensor, CurrentSensorBase):
++    """PSU output current in milliamps; unsupported limits stay unavailable."""
++
++    _quantity = "Current"
++    _value_method = "get_current"
++    _low_method = "get_current_low_threshold"
++    _high_method = "get_current_high_threshold"
++
++
++class PsuInputTelemetry:
++    """Opt-in input readings; missing data must not become false zero samples.
++
++    Existing PDDF input getters default to zero for missing attributes. These
++    platforms expose validated input telemetry only when the PSU is power-good.
++    """
++
++    def _get_input_reading(self, attribute, divisor):
++        try:
++            if not self.get_presence() or not self.get_status():
++                return None
++            output = self.pddf_obj.get_attr_name_output(
++                "PSU{}".format(self.psu_index), attribute)
++            value = output.get("status") if output else None
++            if value is None or isinstance(value, bool):
++                return None
++            value = float(value)
++            if not math.isfinite(value) or value < 0:
++                return None
++            return value / divisor
++        except (AttributeError, NotImplementedError, OSError, ValueError, TypeError):
++            return None
++
++    def get_input_voltage(self):
++        """Return input voltage in volts, or None when unavailable."""
++        return self._get_input_reading("psu_v_in", 1000)
++
++    def get_input_current(self):
++        """Return input current in amperes, or None when unavailable."""
++        return self._get_input_reading("psu_i_in", 1000)
++
++    def get_input_power(self):
++        """Return input power in watts, or None when unavailable."""
++        return self._get_input_reading("psu_p_in", 1000000)
++
++
++class PsuInputVoltageSensor(_PsuSensor, VoltageSensorBase):
++    """PSU input voltage in millivolts; no inferred alarm thresholds."""
++
++    _direction = "Input"
++    _quantity = "Voltage"
++    _value_method = "get_input_voltage"
++    _low_method = None
++    _high_method = None
++
++
++class PsuInputCurrentSensor(_PsuSensor, CurrentSensorBase):
++    """PSU input current in milliamps; no inferred alarm thresholds."""
++
++    _direction = "Input"
++    _quantity = "Current"
++    _value_method = "get_input_current"
++    _low_method = None
++    _high_method = None

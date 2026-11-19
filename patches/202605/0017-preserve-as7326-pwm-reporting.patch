@@ -1,0 +1,63 @@
+Subject: [202605] [accton] Preserve AS7326 integer PWM percentage reporting
+
+Backported from ITJamie/sonic-buildimage accton-fixes commit a91476558669d6222ee9f6a2a4ee4c76539d52a4.
+Verified target source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Includes prerequisite changes to these files from earlier platform patches.
+Keep each final file in one patch so apply/reapply checks remain reliable.
+Preserve 202605 conversion syntax, dependency pins and original fan policy.
+Upstream PR: https://github.com/sonic-net/sonic-buildimage/pull/30780
+Remove when the target branch supplies equivalent fixes.
+
+diff --git a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/fan.py b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/fan.py
+index 23d8be5..0c047f0 100644
+--- a/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/fan.py
++++ b/platform/broadcom/sonic-platform-modules-accton/as7326-56x/sonic_platform/fan.py
+@@ -17,3 +17,12 @@ class Fan(PddfFan):
+     # Provide the functions/variables below for which implementation is to be overwritten
+     # Since AS4630 psu_fan airflow direction cant be read from sysfs, it is fixed as 'F2B' or 'intake'
+ 
++
++    def _get_speed_from_pwm(self, pwm):
++        """Preserve the AS7326 profile's original integer-division result.
++
++        In particular, PWM 15 is 100%, not round(100.75) == 101%.
++        The same conversion must be used for measured and target speed.
++        """
++        pwm_to_dc = eval(self.plugin_data['FAN']['pwm_to_duty_cycle'])
++        return int(pwm_to_dc(pwm))
+diff --git a/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_fan.py b/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_fan.py
+index 93ffa6b..ecfe459 100644
+--- a/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_fan.py
++++ b/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_fan.py
+@@ -162,6 +162,11 @@ class PddfFan(FanBase):
+                 fault = False
+             return fault
+ 
++    def _get_speed_from_pwm(self, pwm):
++        """Convert chassis PWM using the default nearest-percent rounding."""
++        pwm_to_dc = eval(self.plugin_data['FAN']['pwm_to_duty_cycle'])
++        return int(round(pwm_to_dc(pwm)))
++
+     def get_speed(self):
+         """
+         Retrieves the speed of fan as a percentage of full speed
+@@ -220,8 +225,7 @@ class PddfFan(FanBase):
+             else:
+                 fpwm = int(float(output['status']))
+ 
+-            pwm_to_dc = eval(self.plugin_data['FAN']['pwm_to_duty_cycle'])
+-            speed_percentage = int(round(pwm_to_dc(fpwm)))
++            speed_percentage = self._get_speed_from_pwm(fpwm)
+ 
+             return speed_percentage
+ 
+@@ -290,8 +294,7 @@ class PddfFan(FanBase):
+             else:
+                 fpwm = int(float(output['status']))
+ 
+-            pwm_to_dc = eval(self.plugin_data['FAN']['pwm_to_duty_cycle'])
+-            speed_percentage = int(round(pwm_to_dc(fpwm)))
++            speed_percentage = self._get_speed_from_pwm(fpwm)
+             target_speed = speed_percentage
+ 
+         return target_speed

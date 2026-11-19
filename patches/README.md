@@ -123,19 +123,13 @@ are recorded under `compatibility_fixes`.
   IDT clock initialization before PDDF binds their muxes, following upstream
   [PR #30498](https://github.com/sonic-net/sonic-buildimage/pull/30498).
 
-- `202605/0011-read-as7326-psu-voltage-limits.patch`: expose the two PSU output
-  voltage limits using Edgecore's PDDF register definitions (`0xa4`/`0xa5`).
-  Hardware-tested with two FSF019-611 PSUs: both returned 11.390–12.593 V after
-  PMBus device reload and `pmon` restart; voltage health errors cleared.
-  No limits are hardcoded and PSU fan target reporting remains unresolved.
-- `202605/0012-skip-as7326-unsupported-psu-fan-target-checks.patch`: exclude
-  only `PSU1_FAN1.speed` and `PSU2_FAN1.speed` target comparisons. Retain
-  fan status, direction, measured speed and PSU voltage/power-good checks.
+The former `0011` voltage definitions and `0012` narrow PSU fan exclusions are
+folded into the final file patches `0023` and `0020`. Their behavior is retained;
+PSU fan status, direction, measured speed and power-good checks remain enabled.
+
 - `202605/0013-decode-as7326-fsf019-airflow-label.patch`: map the observed
   FSF019-611 `F2B*` value to `EXHAUST`, consistent with Edgecore's model-based
-  decoder. Other airflow labels and direction checks remain intact. With these
-  two patches and `0011`, the test switch reports Services/Hardware OK and a
-  green status LED. No image build or reboot test has been performed yet.
+  decoder. Other airflow labels and direction checks remain intact.
 
 - `202605/0014-complete-as7726-psu-cpu-monitoring.patch`: complete AS7726
   PMBus voltage limits, hardware temperature warning limits (`OT_WARN_LIMIT`,
@@ -149,13 +143,35 @@ are recorded under `compatibility_fixes`.
   thermals using kernel labels/thresholds. Only the two PSU target comparisons
   are excluded from health checking.
 
-The 202605 series is reconciled with `accton-fixes` at
-`2d7307eed68a21ce1b4a05461a7cd2b0c6e9a50d` and the shared Linux watchdog helper
-at `1c8e439f9f14ef04dd05fa62d79e635c215d24d6`. It preserves 202605's pinned SAI
-dependencies and fan conversion format. No master SAI-header update is included.
-`tests/fixtures/accton-202605-parity.json` records the 36 implementation files;
-integration tests apply/reapply all 15 patches, verify parity and original fan
-startup code, and run the reviewed PSU/CPU regressions on the patched source.
+The follow-ups ported from the current `accton-fixes` branch are:
+
+| Patch | Change |
+| --- | --- |
+| `0016` | Enable sensormond for AS7326/AS7726 output sensors. |
+| `0017` | AS7326 integer PWM reporting; preserve the 202605 lambda format and original targets. |
+| `0018` | Retry missing PDDF sysfs paths while retaining positive caching. |
+| `0019` | AS7326 CPU package/core readings and kernel thresholds. |
+| `0020` | AS7326 hardware PSU temperature limits and enabled temperature health checks. |
+| `0021` | Read-only BIOS components on AS7326/AS7726. |
+| `0022` | AS5835 native PSU output voltage/current sensors and sensormond. |
+| `0023` | AS7326/AS7726 input voltage/current/power API and input voltage/current sensors. |
+
+Files modified by several fixes are consolidated into their final patch so
+apply/reapply recognition works on completed source trees. Earlier watchdog,
+health/LED, voltage-limit and CPU changes to those files are included there.
+In particular, `0023` contains the complete PDDF JSON, chassis and PSU sensor
+integration; `0022` contains the complete native AS5835 chassis changes.
+AS5835 input telemetry remains unsupported; manufacturer ratings are not alarms.
+Input power is exposed through the existing PSU API, without daemon changes.
+
+The series is reconciled with `accton-fixes` at
+`5b9c212e474020111a9827a77c10665e0a16f782` and watchdog helper
+`1c8e439f9f14ef04dd05fa62d79e635c215d24d6`. It preserves 202605 dependency pins
+and fan conversion syntax. The experimental master sairedis rollback is excluded.
+The parity fixture records 50 resulting implementation files, checks coverage of
+all reviewed platform changes, and documents the branch adaptations. Integration
+applies/reapplies all 21 patches, checks original fan startup code, and runs
+85 hardware-free regressions against the actual patched source.
 
 The four-family support matrix, exact scope, source pins and required hardware
 checks are in [Edgecore platform support](../docs/edgecore-platform-support.md).

@@ -1,0 +1,165 @@
+Subject: [202605] [accton] Expose AS5835 PSU voltage and current sensors
+
+Backported from ITJamie/sonic-buildimage accton-fixes commit b64a2fcbdc2a8daeaa616102c7fbc11727d930cd.
+Verified target source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Includes prerequisite changes to these files from earlier platform patches.
+Keep each final file in one patch so apply/reapply checks remain reliable.
+Preserve 202605 conversion syntax, dependency pins and original fan policy.
+Upstream PR: https://github.com/sonic-net/sonic-buildimage/pull/30780
+Remove when the target branch supplies equivalent fixes.
+
+diff --git a/device/accton/x86_64-accton_as5835_54x-r0/pmon_daemon_control.json b/device/accton/x86_64-accton_as5835_54x-r0/pmon_daemon_control.json
+index a3b204e..2d03dcc 100644
+--- a/device/accton/x86_64-accton_as5835_54x-r0/pmon_daemon_control.json
++++ b/device/accton/x86_64-accton_as5835_54x-r0/pmon_daemon_control.json
+@@ -1,5 +1,6 @@
+ {
+     "skip_ledd": true,
+-    "skip_pcied": true
++    "skip_pcied": true,
++    "include_sensormond": true
+ }
+ 
+diff --git a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
+index c4a062f..e6725aa 100644
+--- a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
++++ b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
+@@ -72,15 +72,19 @@ class Chassis(ChassisBase):
+ 
+     def __initialize_psu(self):
+         from sonic_platform.psu import Psu
++        from sonic_platform.psu_sensor import PsuVoltageSensor, PsuCurrentSensor
+         for index in range(0, NUM_PSU):
+             psu = Psu(index)
+             self._psu_list.append(psu)
++            self._voltage_sensor_list.append(PsuVoltageSensor(psu, index + 1))
++            self._current_sensor_list.append(PsuCurrentSensor(psu, index + 1))
+     
+     def __initialize_thermals(self):
+-        from sonic_platform.thermal import Thermal
++        from sonic_platform.thermal import Thermal, CpuThermal
+         for index in range(0, NUM_THERMAL):
+             thermal = Thermal(index)
+             self._thermal_list.append(thermal)
++        self._thermal_list.extend(CpuThermal.discover(len(self._thermal_list)))
+     
+     def __initialize_eeprom(self):
+         from sonic_platform.eeprom import Tlv
+@@ -251,4 +255,10 @@ class Chassis(ChassisBase):
+             return False
+         else:
+             return self._api_helper.write_txt_file(SYSLED_FNODE, mode)
+-            
++
++
++    def get_watchdog(self):
++        if self._watchdog is None:
++            from sonic_platform.watchdog import Watchdog
++            self._watchdog = Watchdog()
++        return self._watchdog
+diff --git a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/psu_sensor.py b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/psu_sensor.py
+new file mode 100644
+index 0000000..6391ad0
+--- /dev/null
++++ b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/psu_sensor.py
+@@ -0,0 +1,100 @@
++"""Expose PSU output measurements through the chassis sensor API.
++
++The native AS5835 driver already exports mV/mA. Read its sysfs attributes
++directly because the legacy PSU API returns zero for unreadable files. PSU
++presence and power-good checks still use the existing PSU API.
++"""
++
++import math
++
++from sonic_platform_base.sensor_base import CurrentSensorBase, VoltageSensorBase
++
++
++class _PsuSensor:
++    def __init__(self, psu, position):
++        self._psu = psu
++        self._position = position
++        self._minimum = None
++        self._maximum = None
++
++    def get_name(self):
++        return "{}_Output_{}".format(self._psu.get_name(), self._quantity)
++
++    def get_position_in_parent(self):
++        return self._position
++
++    def is_replaceable(self):
++        return True
++
++    def get_presence(self):
++        return self._psu.get_presence()
++
++    def get_status(self):
++        return self._psu.get_status()
++
++    def _read(self, attribute):
++        try:
++            if not self.get_presence() or not self.get_status():
++                return None
++            if attribute is None:
++                return None
++            value = self._psu._api_helper.read_txt_file(
++                self._psu.hwmon_path + attribute)
++            if value is None or isinstance(value, bool):
++                return None
++            value = float(value)
++            if not math.isfinite(value) or value < 0:
++                return None
++            return value
++        except (AttributeError, NotImplementedError, OSError, ValueError, TypeError):
++            return None
++
++    def get_value(self):
++        value = self._read(self._value_attribute)
++        if value is None:
++            # Do not retain extrema across PSU absence or unreadable samples.
++            self._minimum = self._maximum = None
++        else:
++            self._minimum = value if self._minimum is None else min(value, self._minimum)
++            self._maximum = value if self._maximum is None else max(value, self._maximum)
++        return value
++
++    def get_minimum_recorded(self):
++        self.get_value()
++        return self._minimum
++
++    def get_maximum_recorded(self):
++        self.get_value()
++        return self._maximum
++
++    def get_low_threshold(self):
++        value = self._read(self._low_attribute)
++        return value if value is not None and value > 0 else None
++
++    def get_high_threshold(self):
++        value = self._read(self._high_attribute)
++        return value if value is not None and value > 0 else None
++
++    def get_low_critical_threshold(self):
++        return None
++
++    def get_high_critical_threshold(self):
++        return None
++
++
++class PsuVoltageSensor(_PsuSensor, VoltageSensorBase):
++    """PSU output voltage and manufacturer voltage limits, in millivolts."""
++
++    _quantity = "Voltage"
++    _value_attribute = "psu_v_out"
++    _low_attribute = "psu_mfr_vout_min"
++    _high_attribute = "psu_mfr_vout_max"
++
++
++class PsuCurrentSensor(_PsuSensor, CurrentSensorBase):
++    """PSU output current in milliamps; unsupported limits stay unavailable."""
++
++    _quantity = "Current"
++    _value_attribute = "psu_i_out"
++    _low_attribute = None
++    _high_attribute = None

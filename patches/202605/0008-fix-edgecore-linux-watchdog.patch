@@ -11,22 +11,6 @@ Upstream PRs: https://github.com/sonic-net/sonic-buildimage/pull/30780
 https://github.com/sonic-net/sonic-platform-common/pull/808
 Remove when the target branch provides equivalent fixes.
 
-diff --git a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
-index c4a062f..3e982c3 100644
---- a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
-+++ b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/chassis.py
-@@ -251,4 +251,10 @@ class Chassis(ChassisBase):
-             return False
-         else:
-             return self._api_helper.write_txt_file(SYSLED_FNODE, mode)
--            
-+
-+
-+    def get_watchdog(self):
-+        if self._watchdog is None:
-+            from sonic_platform.watchdog import Watchdog
-+            self._watchdog = Watchdog()
-+        return self._watchdog
 diff --git a/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/watchdog.py b/device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/watchdog.py
 new file mode 100644
 index 0000000..f4fe009

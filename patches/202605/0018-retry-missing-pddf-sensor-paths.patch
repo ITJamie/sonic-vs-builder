@@ -1,0 +1,37 @@
+Subject: [202605] [pddf] Retry sysfs discovery after a missing sensor path
+
+Backported from ITJamie/sonic-buildimage accton-fixes commit 2e33f40dbebde506610bb578af30c2fa3e4a6b73.
+Verified target source: 5ef9e45ccf7f004fb07bf3f9be2f471cf00573bf.
+Includes prerequisite changes to these files from earlier platform patches.
+Keep each final file in one patch so apply/reapply checks remain reliable.
+Preserve 202605 conversion syntax, dependency pins and original fan policy.
+Upstream PR: https://github.com/sonic-net/sonic-buildimage/pull/30780
+Remove when the target branch supplies equivalent fixes.
+
+diff --git a/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddfapi.py b/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddfapi.py
+index fc13369..80e2c14 100644
+--- a/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddfapi.py
++++ b/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddfapi.py
+@@ -71,7 +71,9 @@ class PddfApi():
+     def get_paths(self, target, attr):
+         aa = target + attr
+ 
+-        if aa in cache:
++        # A missing hwmon path may become available after driver startup.
++        # Retain positive lookups, but never let a negative lookup persist.
++        if cache.get(aa):
+             return cache[aa]
+ 
+         strings = []
+@@ -87,7 +89,10 @@ class PddfApi():
+                 if paths:
+                     strings.extend(paths)
+ 
+-        cache[aa] = strings
++        if strings:
++            cache[aa] = strings
++        else:
++            cache.pop(aa, None)
+         return strings
+ 
+     def get_path(self, target, attr):

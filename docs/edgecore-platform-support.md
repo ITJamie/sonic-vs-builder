@@ -21,8 +21,11 @@ is performed. Older upstream branches do not automatically receive these patches
 | Health / status LED | Preserve existing native methods and config | Add PDDF methods and matching LED labels | Add PDDF methods, LED labels and missing health config | Add PDDF methods and matching LED labels |
 | CPU hardware watchdog | Add native adapter and lazy chassis getter | Add missing adapter | Replace existing adapter's unsafe constructor behavior | Add missing adapter |
 | Thermal control | Original startup/policy; full speed on missing/nonfinite readings, then recover | Original startup/policy; sensor fallback/retry | Same, plus correct exhaust/intake policy selection | Original startup/policy; sensor fallback/retry |
-| PSU monitoring | VOUT_MODE-aware voltage limits; unsupported target-speed checks excluded | Hardware voltage limits, F2B* mapping and narrow target-speed exclusions | Hardware voltage/temperature limits, F2B* mapping and narrow target-speed exclusions | Preserve existing monitoring |
-| CPU temperatures | Package/core readings and kernel thresholds | Preserve existing inventory | Package/core readings and kernel thresholds | Preserve existing inventory |
+| PSU monitoring | VOUT_MODE-aware voltage limits; unsupported target-speed checks excluded | Hardware voltage/temperature limits, F2B* mapping and narrow target-speed exclusions | Hardware voltage/temperature limits, F2B* mapping and narrow target-speed exclusions | Preserve existing monitoring |
+| Output voltage/current CLI | Native PSU sensors | PDDF PSU sensors | PDDF PSU sensors | Preserve existing monitoring |
+| Input voltage/current/power | Unsupported on inspected YM-1401A | FSF019 readings via PSU API; voltage/current sensors | Same | Preserve existing monitoring |
+| BIOS inventory | Existing native BIOS/CPLD inventory | Read-only DMI BIOS component | Same | Preserve existing inventory |
+| CPU temperatures | Package/core readings and kernel thresholds | Package/core readings and kernel thresholds | Package/core readings and kernel thresholds | Preserve existing inventory |
 | Service recovery | Restart unexpected monitor failures | Same | Same | Same |
 | IDT clock ordering | Not applicable | Before PDDF mux binding | Before PDDF mux binding | Not applicable |
 | SDK stable cache | 128 MiB | Existing tested 128 MiB patch | 128 MiB | Preserve vendor/upstream profile |
@@ -55,7 +58,7 @@ are not hidden by adding service exclusions.
 
 ## AS7326 PSU voltage validation
 
-Patch `0011` adds Edgecore's missing `psu_v_out_min` and `psu_v_out_max`
+The voltage definitions originally in `0011` (now consolidated in `0023`) add Edgecore's missing `psu_v_out_min` and `psu_v_out_max`
 definitions to both PSU PMBus devices. Registers `0xa4` and `0xa5` are decoded
 by the existing PDDF driver; the existing platform API converts millivolts to
 volts. No FSF045-specific constants or health-check exclusions are added.
@@ -71,8 +74,8 @@ PSU fan target, under-speed and over-speed APIs remain unsupported. Edgecore's
 target-speed override returns measured speed, which is not an independent
 setpoint; this patch does not adopt that workaround.
 
-Patches `0012` and `0013` complete the live health compatibility fix. `0012`
-excludes only `PSU1_FAN1.speed` and `PSU2_FAN1.speed` target comparisons,
+The exclusions originally in `0012` (now in `0020`), together with `0013`,
+complete the live health compatibility fix. The exclusions cover only `PSU1_FAN1.speed` and `PSU2_FAN1.speed` target comparisons,
 following the narrow exclusions proposed in upstream PR #8198. Presence,
 status, airflow, RPM-derived speed reporting and PSU voltage/power-good checks
 remain enabled. The existing PDDF status reports a stopped fan as failed;
@@ -139,7 +142,7 @@ unchanged. AS5835 and AS7816 receive no clock-ordering changes.
 
 ## Verification and remaining hardware checks
 
-The regression fixture applies all fifteen 202605 patches to pinned upstream,
+The regression fixture applies all 21 current 202605 patches to pinned upstream,
 including adding a module inside an initialized submodule, then checks reverse
 recognition and Python compilation. It executes the patched API/monitor methods
 with simulated sensor failures and Linux watchdog sysfs/ioctls. It compares SDK
@@ -147,10 +150,10 @@ values against the actual pinned Edgecore profiles and checks that unrelated SDK
 properties, PDDF sensor inventory and register values are unchanged.
 
 The complete platform backport follows fork commit
-`2d7307eed68a21ce1b4a05461a7cd2b0c6e9a50d`, with the shared watchdog helper
+`5b9c212e474020111a9827a77c10665e0a16f782`, with the shared watchdog helper
 from platform-common commit `1c8e439f9f14ef04dd05fa62d79e635c215d24d6`.
 It retains 202605's dependency versions and string-based PDDF fan conversions.
-The parity fixture checks all 36 resulting implementation files, and startup
+The parity fixture checks all 50 resulting implementation files, and startup
 regressions compare the original monitor entry points. The PSU and CPU tests
 include a compiled regression for the shared `ym2651y` voltage decoder.
 
@@ -200,3 +203,20 @@ On each family, and both listed airflow variants:
 - [AS7326 IDT ordering, PR #30498](https://github.com/sonic-net/sonic-buildimage/pull/30498).
 - [Older SDK cache workaround, PR #22641](https://github.com/sonic-net/sonic-buildimage/pull/22641).
 - [Linux watchdog API](https://docs.kernel.org/watchdog/watchdog-api.html).
+
+## Monitoring follow-ups synchronized on 2026-11-19
+
+Patches `0016`–`0023` bring in output sensors on all three inspected models,
+AS7326 PWM reporting, PDDF path retry, AS7326 CPU and PSU temperature monitoring,
+PDDF BIOS inventory, and AS7326/AS7726 input telemetry. Original startup speeds
+and normal thermal policies remain intact. Input power uses the PSU API; voltage
+and current also populate the standard sensor inventory. Input sensor limits
+remain unavailable rather than treating manufacturer ratings as alarm thresholds.
+
+Read-only FSF019-611 checks on AS7326/AS7726 returned plausible input readings
+around 226–228 V, 0.31–0.38 A and 72–80 W per PSU. AS5835 YM-1401A input registers
+returned zero despite active output and remain unsupported. Its manufacturer
+input-current rating also needs vendor confirmation. No airflow mapping was
+changed as part of this work. These hardware checks do not validate a newly
+built 202605 image; deployment/reboot validation of the complete patch set remains
+outstanding. The current backport integration passes 85 software regressions.

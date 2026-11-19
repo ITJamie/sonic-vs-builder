@@ -84,14 +84,22 @@ class EdgecorePlatform(unittest.TestCase):
                 for key, address in devices:
                     attrs = after[key]["i2c"]["attr_list"]
                     definitions = [("psu_v_out_min", "0xa4"), ("psu_v_out_max", "0xa5")]
-                    if model == "as7726_32x":
-                        definitions.append(("psu_temp1_high_threshold", "0x51"))
+                    definitions.append(("psu_temp1_high_threshold", "0x51"))
+                    definitions = [("psu_v_in", "0x88"), ("psu_i_in", "0x89"),
+                                   ("psu_p_in", "0x97")] + definitions
                     limits = [a for a in attrs if a["attr_name"] in dict(definitions)]
                     self.assertEqual(limits, [
                         {"attr_name": name, "attr_devaddr": address, "attr_devtype": "pmbus",
                          "attr_offset": offset, "attr_mask": "0x0", "attr_cmpval": "0xff", "attr_len": "2"}
                         for name, offset in definitions])
                     after[key]["i2c"]["attr_list"] = [a for a in attrs if a not in limits]
+            if model in ("as7326_56x", "as7726_32x"):
+                self.assertEqual(after["PLATFORM"]["num_components"], 1)
+                self.assertEqual(after.pop("COMPONENT1")["comp_attr"]["name"], "BIOS")
+                if "num_components" in before["PLATFORM"]:
+                    after["PLATFORM"]["num_components"] = before["PLATFORM"]["num_components"]
+                else:
+                    after["PLATFORM"].pop("num_components")
             for name, device in after.items():
                 if device.get("dev_info", {}).get("device_type") == "LED":
                     # Label changes must not alter register addresses/values or topology.
@@ -122,6 +130,8 @@ class EdgecorePlatform(unittest.TestCase):
                         "services_to_ignore": [], "devices_to_ignore": ["asic"],
                         "user_defined_checkers": [], "polling_interval": 60,
                         "led_color": health["led_color"]}
+                    original["devices_to_ignore"] = [d for d in original["devices_to_ignore"]
+                                                     if d != "psu.temperature"]
                     self.assertEqual(health["devices_to_ignore"], original["devices_to_ignore"] +
                                      ["PSU1_FAN1.speed", "PSU2_FAN1.speed"])
                     original["led_color"] = health["led_color"]
@@ -144,6 +154,13 @@ class EdgecorePlatform(unittest.TestCase):
     def test_every_reviewed_platform_change_is_backported(self):
         manifest = json.loads((ROOT / "tests/fixtures/accton-202605-parity.json").read_text())
         self.assertEqual(manifest["target_commit"], COMMIT)
+        # Every implementation file changed in the reviewed fork must have a
+        # backport. Only explicitly documented branch syntax/API differences
+        # may differ from its source blob.
+        self.assertLessEqual(set(manifest["source_files"]), set(manifest["files"]))
+        for name, expected in manifest["source_files"].items():
+            if name not in manifest["branch_adaptations"]:
+                self.assertEqual(manifest["files"][name], expected, name)
         for name, expected in manifest["files"].items():
             with self.subTest(path=name):
                 self.assertEqual(hashlib.sha256((SOURCE / name).read_bytes()).hexdigest(), expected)
@@ -448,7 +465,17 @@ def main():
         SOURCE.mkdir()
         patches = sorted((ROOT / "patches/202605").glob("*.patch"))
         populate_patch_sources(SOURCE, COMMIT, patches, os.environ.get("EDGECORE_SOURCE_CACHE"),
-                               extra_paths=("platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_fan.py",))
+                               extra_paths=(
+                                   "platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/__init__.py",
+                                   "platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_fan.py",
+                                   "platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_component.py",
+                                   "src/sonic-platform-common/sonic_platform_base/__init__.py",
+                                   "src/sonic-platform-common/sonic_platform_base/device_base.py",
+                                   "src/sonic-platform-common/sonic_platform_base/sensor_base.py",
+                                   "src/sonic-platform-common/sonic_platform_base/component_base.py",
+                                   "device/accton/x86_64-accton_as5835_54x-r0/sonic_platform/psu.py",
+                                   "platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddf_psu.py",
+                                   "platform/pddf/i2c/utils/pddfparse.py"))
         ORIGINALS = {str(path.relative_to(SOURCE)): path.read_text() for path in SOURCE.rglob("*") if path.is_file()}
         for path in ORIGINALS:
             if path.endswith(".bcm"):
@@ -473,12 +500,25 @@ def main():
         helper = types.ModuleType("platform_test_utils")
         helper.SOURCE, helper.BASE, helper.DEVICE = SOURCE, BASE, DEVICE
         helper.definitions = definitions
+        helper.platform_directory = platform_directory
+        sys.path.insert(0, str(SOURCE / "src/sonic-platform-common"))
+        sys.path.insert(0, str(SOURCE / "platform/pddf/platform-api-pddf-base"))
         thermal_base = types.ModuleType("sonic_platform_base.thermal_base")
         thermal_base.ThermalBase = object
+        platform_base = types.ModuleType("sonic_platform_base")
+        platform_base.__path__ = [str(SOURCE / "src/sonic-platform-common/sonic_platform_base")]
+        fan_base = types.ModuleType("sonic_platform_base.fan_base")
+        fan_base.FanBase = object
         with patch.dict(sys.modules, {"platform_test_utils": helper,
-                                      "sonic_platform_base.thermal_base": thermal_base}):
+                                      "sonic_platform_base": platform_base,
+                                      "sonic_platform_base.thermal_base": thermal_base,
+                                      "sonic_platform_base.fan_base": fan_base}):
             for name in ("test_as7726_cpu_thermal", "test_as5835_cpu_thermal",
-                         "test_psu_health", "test_as5835_psu"):
+                         "test_psu_health", "test_as5835_psu",
+                         "test_as7326_cpu_thermal", "test_as7326_fan_conversion",
+                         "test_pddf_path_recovery", "test_as7326_psu_temperature",
+                         "test_bios_inventory", "test_as5835_psu_sensors",
+                         "test_psu_sensors", "test_psu_input"):
                 spec = importlib.util.spec_from_file_location(name, ROOT / "tests/accton_regressions" / (name + ".py"))
                 module = importlib.util.module_from_spec(spec)
                 sys.modules[name] = module

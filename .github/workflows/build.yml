@@ -46,7 +46,7 @@ on:
         type: choice
         options:
           - read-write
-          - off
+          - 'off'
       publish_dockerhub:
         description: Also push the validated VS image to itjamie/docker-sonic-vs
         required: true
